@@ -1,3 +1,22 @@
+2004-03-22  jkbonfield  <jkb>
+
+	TAG CODEBASE with rel-1-4-1
+
+2004-03-22  jkbonfield  <jkb>
+
+        * src/tk_utils/html_library.tcl:
+        (11:25:37) Removed the focus hack which broke when tk was updated
+        to 8.4 (it gave rise to an infinite recursion). 
+
+        * src/tk_utils/help_choose.tcl,
+        * src/tk_utils/tclIndex:
+        (11:26:33) Changed how the help mechanism is chosen. 
+
+        * src/pregap4/gui.tcl,
+        * src/trev/trev.tcl:
+        (11:27:53) Removed the 'beta' component of the program version
+        number. 
+
 2004-02-12  James Bonfield  <jkb>
 
 	TAG CODEBASE with rel-1-4
@@ -893,7 +912,7 @@
 	check_template_position() was resetting the consistency value to
 	zero, which overwrites the CONSIST_STRAND flags. Deleted this.
 
-2003-07-01  Rodger Staden  <rs@mrc-lmb.cam.ac.uk>
+2003-07-01  Rodger Staden  <rs>
 
 	* src/qclip/qclip.c (main):
 	Set the maximum right hand quality clip to 10 million, as it was
