@@ -1,0 +1,65 @@
+			    IO_LIB VERSION 1.8.12
+			    =====================
+
+Io_lib is a library of file reading and writing code to provide a general
+purpose trace file (and Experiment File) reading interface. The programmer
+simply calls the (eg) read_reading to create a "Read" C structure with the
+data loaded into memory. It has been compiled and tested on:
+
+Compaq Tru64 Unix 5.1B (formerly Digital Unix)
+RedHat Linux 9.0
+
+In addition to the above, the code has previously (but not tested with this
+release) been compiled and used on MacOS X, Solaris, Irix and MS
+Windows NT.
+
+The directories below here contain the io_lib code. These support the
+following file formats:
+
+	SCF trace files
+	ABI trace files
+	ALF trace files
+	CTF trace files
+	Experiment files
+	Plain text files
+	ZTR trace files
+
+In addition, a library is used for bringing all these together into a single
+library so that only a single function call (read_reading or write_reading)
+is required to access the file, regardless of the file type it uses. See the
+file include/Read.h for the generic 'Read' structure.
+
+
+Unix - autoconf
+---------------
+
+We now have a GNU autoconf build mechanism, but this is not without problems
+(mainly the difficulty in debugging and development when using libtool and the
+lack of MS Windows support). It's much easier for general building though.
+
+To build:
+
+1. ./configure
+
+"./configure --help" will give a list of the options for GNU autoconf. For
+modifying the compiler options or flags you may wish to redefine the CC or
+CFLAGS variable.
+
+Eg (in sh or bash):
+   CC=cc CFLAGS=-g ./configure
+
+2. make (or gmake)
+
+This will build the sources.
+
+3. make install
+
+The default installation location is /usr/local/bin and /usr/local/lib. These
+can be changed with the --prefix option to "configure".
+
+
+History
+-------
+				    
+See CHANGES file
+
