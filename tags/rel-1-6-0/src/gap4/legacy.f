@@ -1,0 +1,3127 @@
+C note to kfs: add extra option to assembly menu "Ignore previous data"?
+C duplicate dialogue from "normal shotgun assembly" but
+C add extra argument NOPT to argument list for dbauto.
+C set to 0 for all existing calls to dbauto and to 1 for new option.
+       SUBROUTINE DBAUTO(RELPG,LNGTHG,LNBR,RNBR,MAXDB,IDBSIZ,
+     +NGELS,NCONTS,CLIST,MAXGEL,
+     +SEQ1,SEQ2,SEQ3,SEQ4,SEQ5,SEQC2,SEQG2,SEQG3,SEQC3,RNAMES,
+     +MAXSEQ,MAXGLM,
+     +SAVPS,SAVPG,SAVL,MAXSAV,CENDS,NENDS,MAXCON,
+     +IDEV1,NAMARC,NAMPRO,PERCD,
+     +IOKENT,ISHOW,MINMAT,MAXPG,PERMAX,IREPSC,IOPT,NOPT,
+     +ANSJOK,ANSFE,IWING,NBAD,LIST,IOK,MINOVR)
+C
+C IOKENT = 0 permit entry, 1 forbid entry
+C ISHOW  = 1  hide all alignemtns
+C          2  show passed alignments
+C          3  show all alignments
+C          4  show only failed alignments
+C IREPSC = 0  save alignment scores in file, 1 dont
+C IOPT   = 1 'Perform normal shotgun assembly'
+C          2 'Perform shotgun assembly with tagged segments masked'
+C          3 'Put all sequences in one contig'
+C          4 'Put all sequences in new contigs'
+C          5 'Perform shotgun assembly with finished segments masked'
+C NOPT   = 1 'Perform shotgun assembly but ignore all previous data'
+C ANSJOK = 0  permit joins, 1 dont
+C ANSFE  = 1 'Reject failures'
+C          2 'Enter all readings'
+C
+C
+      INTEGER CLIST(1),CNUM
+      INTEGER RELPG(MAXDB),PL(2),PR(2),RMOST
+      INTEGER LNGTHG(MAXDB),LNBR(MAXDB),RNBR(MAXDB)
+      INTEGER JOINT(2),ITOTPC(2),ITOTPG(2),IDIM22(2),IDOUT(2)
+      INTEGER LINCON(2),LLINO(2),ITYPE(2),IFAIL(2)
+      INTEGER ILEFTS(2),ILC(2),IPOSC(2),IPOSG(2),ISENSE(2)
+      INTEGER LREG,RREG,X,ANSJOK,ANSFE
+      INTEGER CENDS(MAXCON),NENDS(MAXCON),ILADD(1),IRADD(1)
+      CHARACTER SEQ3(MAXGLM),SEQC2(MAXGLM,2),SEQG2(MAXGLM,2)
+      CHARACTER SEQ1(MAXSEQ),SEQ2(MAXGLM),SEQ4(MAXGLM)
+      INTEGER SAVPS(MAXSAV),SAVPG(MAXSAV),SAVL(MAXSAV)
+      CHARACTER NAMARC*(*),NAMPRO*(*),LIST*(*)
+      CHARACTER SEQ5(MAXGLM),SEQG3(MAXGLM),SEQC3(MAXGLM)
+      CHARACTER*(*) RNAMES(IDBSIZ)
+      CHARACTER CSEN
+      REAL PERMIS(2)
+      CHARACTER INFOD*80
+      CHARACTER INFOUD*80
+      INTEGER GNREAD,GCLIN,CMPSEQ
+      EXTERNAL GNREAD,GCLIN,CMPSEQ
+      CALL INFO('Automatic sequence assembler')
+      IDM = 5
+      MINSLI = 3
+      IFAIL(1) = 0
+      IEMPTY=0
+      MAXPC = MAXPG
+C note by KFS (22/5/95) - use of CLIST and CNUM by auto_assemble.
+C auto_assemble is a special case where all contigs are always used
+C so although CLIST = NULL, CNUM = NCONTS and this fact is catered for in
+C get_contig_list
+      CNUM = NCONTS
+C FIXME
+C      IF (IOPT.EQ.2) IOPT = 5
+C      WRITE(*,*)'permit entry',IOKENT
+C      WRITE(*,*)'display',ISHOW
+C      WRITE(*,*)'align',IREPSC
+C      WRITE(*,*)'option',IOPT
+C      WRITE(*,*)'joins',ANSJOK
+C      WRITE(*,*)'failure mode',ANSFE
+C      WRITE(*,*)'window',IWING
+C      WRITE(*,*)'dashes',NBAD
+C      WRITE(*,*)'NGELS',NGELS
+C      WRITE(*,*)'NOPT=',NOPT
+C      NOPT = 1
+      IF((NGELS.LT.1).OR.(NOPT.EQ.1))IEMPTY=1
+      CALL DBCHEK(IDEV1, RELPG, LNGTHG, LNBR, RNBR, IDM, IDBSIZ,
+     +     NGELS, NCONTS, IERR)
+      IF(IERR.GT.1) RETURN
+      CALL SINDB(IDEV1,NGELS,RNAMES,NAMARC,1)
+C
+C IOKENT = 0 permit entry, 1 forbid entry
+C ISHOW  = 1  hide all alignemtns
+C          2  show passed alignments
+C          3  show all alignments
+C          4  show only failed alignments
+C IREPSC = 0  save alignment scores in file, 1 dont
+C IOPT   = 1 'Perform normal shotgun assembly'
+C          2 'Perform shotgun assembly with tagged segments masked'
+C          3 'Put all sequences in one contig'
+C          4 'Put all sequences in new contigs'
+C          5 'Perform shotgun assembly with finished segments masked'
+C ANSJOK = 0  permit joins, 1 dont
+C ANSFE  = 1 'Reject failures'
+C          2 'Enter all readings'
+C MINOVR      The minimum overlap between a reading and a contig. 
+C             If this value is not reached the overlap is reported 
+C             in the count of overlaps but, no alignment is done and 
+C             as far as that match is concerned the reading does not 
+C             overlap ie if it does not overlap anywhere else with 
+C             amount MINOVR the reading will start a new contig.
+C
+C
+      JGEL = 0
+      JNGEL = 0
+      JNJOIN = 0
+      JOINF = 0
+      MASK = 0
+      IMATC = 0
+      IF((IOPT.EQ.3).OR.(IOPT.EQ.4)) MINMAT = 1
+      IF (IOPT.EQ.2) MASK = 3
+      IF (IOPT.EQ.5) MASK = 4
+      IF ((IOPT.EQ.1).OR.(IOPT.EQ.2).OR.(IOPT.EQ.5)) THEN
+        IDIM1=0
+        MAXOVR=MAXGEL-3*MAX(MAXPC,MAXPG)
+        IMATC = 0
+C get ready for precon
+C
+C set task (normal consensus+title)
+C
+        ITASK = 5
+C
+C set masking if required
+C
+        IF (MASK.EQ.3) ITASK = ITASK + 32
+        IF (MASK.EQ.4) ITASK = 8 + 1
+        IF(IEMPTY.EQ.0) THEN
+          CALL PRECON(SEQ1,NAMPRO,PERCD,
+     +          IDBSIZ,CNUM,CLIST,ITASK,IDEV1,IDIM1,MAXGEL,MAXSEQ,
+     +          IWING,NBAD,
+     +          ILADD,IRADD,IFAIL(1))
+          IF(IFAIL(1).NE.0) THEN
+            CALL ERROMF('Error calculating consensus')
+            GO TO 901
+          END IF
+C        IF(IDIM1.GT.0)CALL FMTDB(SEQ1,IDIM1,1,IDIM1,60,30)
+C        IF (0.EQ.0) RETURN
+        END IF
+C        WRITE(*,*)'INITIAL IDIM1',IDIM1,ITASK
+C
+C init hashing constants
+C
+      IOPTC = 1
+      IDSAV = CMPSEQ(IOPTC,CSEN,MINMAT,SAVPS,SAVPG,SAVL,MAXSAV,
+     +SEQ1,SEQ2,
+     +MAXSEQ,MAXGEL)
+      IF (IDSAV.NE.0) THEN
+        IOPTC = 6
+        IDSAV = CMPSEQ(IOPTC,CSEN,MINMAT,SAVPS,SAVPG,SAVL,IDSAV,
+     +  SEQ1,SEQ2,
+     +  MAXSEQ,MAXGEL)
+        RETURN
+      END IF
+      END IF
+C
+C set intitial values for contig count and number of readings
+C just to get thru the first consensus calc
+      NGELSL = NGELS + 2
+      NCONTL = NCONTS +1
+C
+C
+C                          MAIN LOOP
+C
+C
+1     CONTINUE
+      CALL UPDOUT()
+C
+C
+      IDIM2=MAXGEL
+      IOK = GNREAD(NAMARC)
+      IF(IOK.EQ.1) GO TO 900
+      IF(IOK.NE.0) GO TO 1
+      CALL INFO('>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>')
+C      WRITE(*,*)'>>>>>>>>>>>',NAMARC
+C      WRITE(6,*)'IDIM1',IDIM1,NGELS
+C         CALL FMTDB1(SEQ1,IDIM1,1,IDIM1,60,6)
+C      WRITE(*,*)'MAIN'
+C      WRITE(*,*)(SEQ1(JJJJ),JJJJ=1,IDIM1)
+      JGEL = JGEL + 1
+C      WRITE(INFOD,1006)JGEL
+C 1006 FORMAT('Processing ',I8,' in batch')
+C CHECKED
+      CALL SWRT1(INFOD,'Processing %8d in batch%!', JGEL)
+      CALL INFO(INFOD)
+C       WRITE(INFOD,1007)NAMARC
+C 1007  FORMAT('File name ',A)
+C CHECKED
+      CALL SWRT2B(INFOD, 'File name %.*s%!', LEN(NAMARC), NAMARC)
+      CALL INFO(INFOD)
+C Added by Simon 23-March-1993
+      CALL ARRFIO(NAMARC,SEQ2,IDIM2,1,IOK)
+C      CALL OPENRS(IDEV4,NAMARC,IOK,LRECL,2)
+      IF(IOK.NE.0)THEN
+C        IF(INF.EQ.1) RETURN
+         CALL AERROR(LIST,NAMARC,0)
+         GO TO 1
+      END IF
+C       WRITE(INFOD,1800)IDIM2
+C 1800  FORMAT('Reading length ',I6)
+C CHECKED
+      CALL SWRT1(INFOD,'Reading length %6d%!',IDIM2)
+      CALL INFO(INFOD)
+C
+C
+C
+      IF(IDIM2.LT.MINMAT)THEN
+        CALL AERROR(LIST,NAMARC,1)
+        GO TO 1
+      END IF
+      IF((IOPT.EQ.3).OR.(IOPT.EQ.4)) THEN
+        CALL DBAUTP(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +  SEQ2,NAMARC,JOINT,ITYPE,ISENSE,SEQC2,ITOTPC,
+     +  IDIM2,IDOUT,LLINO,LINCON,IFAIL,IDBSIZ,MAXDB,
+     +  IDEV1,MAXGEL,IMATC,IEMPTY,
+     +  RNAMES,IOPT)
+        IF(IFAIL(1).NE.0) THEN
+          CALL AERROR(LIST,NAMARC,3)
+        ELSE
+          JNGEL = JNGEL + 1
+        END IF  
+        GO TO 1
+      END IF
+      CALL SQCOPY(SEQ2,SEQ3,IDIM2)
+      IFCOMP=0
+      IMATC=0
+      IFAIL(1)=0
+      IFAIL(2)=0
+      JOBC = 2
+      IF ((NGELSL.LT.NGELS).AND.(NCONTL.LT.NCONTS)) THEN
+        JOBC = 1
+      ELSE IF (NGELSL.EQ.NGELS) THEN
+        JOBC = 0
+      END IF
+      NGELSL = NGELS
+      NCONTL = NCONTS
+      IF(IEMPTY.EQ.0)
+     +CALL AUTOCN(SEQ1,IDIM1,SEQ2,IDIM2,ILEFTS,ILC,IPOSC,
+     +IPOSG,ISENSE,LLINO,IMATC,IFCOMP,MINMAT,
+     +MAXGEL,MAXGLM,SEQ5,
+     +SAVPS,SAVPG,SAVL,MAXSAV,CENDS,NENDS,MAXCON,
+     +SEQG2,SEQC2,SEQ4,IDOUT,IDIM22,ITOTPG,ITOTPC,JOINT,IFAIL,
+     +ITYPE,MAXPC,MAXPG,PERMAX,MINSLI,SEQG3,SEQC3,KFAIL,
+     +JOBC,PERMIS,LENO,ISHOW,MASK,MINOVR)
+      IF(IREPSC.EQ.0) THEN
+        IF(IFCOMP.NE.0) THEN
+          CALL AERROR(LIST,NAMARC,2)
+          GO TO 1
+        END IF
+        IF(IMATC.LE.0) THEN
+          PERMIS(1) = 0.
+          LENO = 0
+        END IF
+C        WRITE(INFOUD,1022)NAMARC,PERMIS(1),IDIM2,LENO
+C 1022 FORMAT(A,F5.1,2I6)
+        CALL SWRT5(INFOUD,'%.*s%5.1f%6d%6d%!', LEN(NAMARC), NAMARC,
+     +     PERMIS(1), IDIM2, LENO)
+        CALL TOLIST(LIST,INFOUD)
+      END IF
+      IF(IOKENT.NE.0) GO TO 1
+C     THIS RETURNS THE FOLLOWING:
+C     ILEFTS  POSITION IN CONSENSUS OF LEFT END OF MATCHING CONTIGS
+C     ILC     LENGTHS OF MATCHING CONTIGS
+C     IPOSC   POSITION OF MATCH RELATIVE TO CONTIG
+C     IPOSG   POSITION OF MATCH RELATIVE TO NEW GEL
+C     ISENSE  SENSE OF NEW GEL
+C     LLINO   LEFT GEL NUMBER IN MATCHING CONTIGS
+C     IMATC   THE NUMBER OF MATCHING CONTIGS (>2 IS ERROR!)
+C     IFCOMP  ERROR FLAG FOR COMPARISON (COMPARISON ARRAYS OVERFLOWED)
+      IF(IFCOMP.NE.0) THEN
+        CALL AERROR(LIST,NAMARC,2)
+        GO TO 1
+      END IF
+      CALL SQCOPY(SEQ3,SEQ2,IDIM2)
+C
+C
+C No overlap below mismatch cutoff
+C
+      IF(IMATC.EQ.0) THEN
+C
+C if masking then count as failure (code 5) unless we are entering all reads
+C ie if we are masking and there is no match we do not enter unless "enter
+C all reads (ANSFE=2) is set.
+C
+        IF (MASK.NE.0) THEN
+          IF (ANSFE.EQ.1) THEN
+            CALL AERROR(LIST,NAMARC,5)
+            GO TO 1
+          END IF
+        END IF
+C
+C                     NO OVERLAP NEW CONTIG
+C
+        IF(IFAIL(1).NE.0) THEN
+          IF (ANSFE.EQ.1) THEN
+            CALL AERROR(LIST,NAMARC,2)
+            GO TO 1
+          END IF
+          CALL INFO('New reading overlaps poorly: start a new contig')
+        ELSE
+          CALL INFO('New reading does not overlap: start a new contig')
+        END IF
+C     ITYPE 0 = NO OVERLAP
+C     ISENSE 1 = SAME SENSE AS ARCHIVE
+        ITYPE(1)=0
+        ISENSE(1)=1
+        IDOUT(1)=MAXGEL
+        CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +  SEQ2,NAMARC,X,ITYPE,ISENSE,SEQC2(1,1),ITOTPC(1),
+     +  IDIM2,IDOUT(1),LLINO,LINCON,IFAIL,IDBSIZ,
+     +  IDEV1,MAXGEL,RNAMES)
+        IF(IFAIL(1).NE.0) THEN
+          CALL AERROR(LIST,NAMARC,3)
+          GO TO 1
+        END IF
+        IEMPTY=0
+        IDIM1=IDIM1+1
+C
+C new start
+C
+        LREG = 1
+        RREG = IDIM2
+        LINCON(1) = IDBSIZ - NCONTS
+        CALL PRECN1(SEQ1,NAMPRO,PERCD,IDBSIZ,LINCON(1),LREG,RREG,
+     +       ITASK,IDEV1,IDIM1,MAXGEL,MAXSEQ,IWING,NBAD,
+     +       ILADD,IRADD,IFAIL(1))
+        IF(IFAIL(1).NE.0) THEN
+          CALL ERROMF('Error calculating consensus')
+          GO TO 900
+        END IF
+C         CALL FMTDB1(SEQ1,IDIM1,1,IDIM1,60,1)
+C         CALL FMTDB(SEQ1,IDIM1,1,IDIM1,60,6)
+C
+C new end next bit commented out
+C
+C        IF((IDIM1+19+IDIM2).GT.MAXSEQ)THEN
+C          WRITE(IDEV,1021)MAXSEQ
+C1021      FORMAT(' Database maximum consensus length (',I8,') exceeded')
+C          GO TO 900
+C        END IF
+C        CALL ADDTIT(SEQ1(IDIM1),NAMPRO,NGELS,IDIM1)
+C        CALL MSTLKL(SEQ2,IDIM2)
+C        CALL SQCOPY(SEQ2,SEQ1(IDIM1),IDIM2)
+C        IDIM1=IDIM1+IDIM2-1
+        JNGEL = JNGEL + 1
+        GO TO 1
+      END IF
+C
+C
+C         OVERLAP SO TRY TO ENTER THE READING
+C
+C
+      DO 100 I=1,IMATC
+        N=IDBSIZ-NCONTS
+        DO 99 J=N,IDBSIZ-1
+          IF(LNBR(J).NE.LLINO(I))GO TO 99
+          LINCON(I)=J
+          GO TO 100
+99      CONTINUE
+C        WRITE(INFOD,10077)LLINO(I)
+C10077   FORMAT(' Contig line for contig',I8,' not found!')
+        CALL SWRT1(INFOD,' Contig line for contig%8d not found!%!',
+     +       LLINO(I))
+        CALL ERROMF(INFOD)
+        GO TO 900
+100   CONTINUE
+C
+      IF (IMATC.EQ.1) THEN
+C
+C
+C                     SINGLE OVERLAP
+C
+C
+C
+C        WRITE(INFOD,1014)LLINO(1)
+C1014    FORMAT('New reading overlaps contig',I8)
+C CHECKED
+        CALL SWRT1(INFOD,'New reading overlaps contig%8d%!',LLINO(1))
+        CALL INFO(INFOD)
+        IF(ITOTPG(1).GT.0) CALL CCTA(SEQG2(1,1),IDIM22(1))
+C      WRITE(*,*)'BEFORE entry'
+C      WRITE(*,*)(SEQ1(JJJ),JJJ=1,IDIM1)
+        CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +  SEQG2(1,1),NAMARC,JOINT(1),ITYPE(1),ISENSE(1),
+     +  SEQC2(1,1),
+     +  ITOTPC(1),IDIM22(1),IDOUT(1),LLINO(1),LINCON(1),
+     +  IFAIL(1),IDBSIZ,IDEV1,
+     +MAXGEL,RNAMES)
+        IF(IFAIL(1).NE.0) THEN
+          CALL AERROR(LIST,NAMARC,3)
+          GO TO 1
+        END IF
+        JNGEL = JNGEL + 1
+C      WRITE(*,*)'after entry'
+C      WRITE(*,*)(SEQ1(JJJ),JJJ=1,IDIM1)
+        CALL UPDCON(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,NGELS,NCONTS,
+     +  SEQ1,MAXSEQ,IDIM1,ILEFTS(1),ILC(1),LINCON(1),NAMPRO,SEQ2,
+     +  IDEV1,IFAIL(1),MAXGEL,IDM,PERCD,MASK,CLIST)
+        IF(IFAIL(1).NE.0) THEN
+          CALL ERROMF('Error calculating consensus')
+          GO TO 900
+        END IF
+        IF(KFAIL.NE.0) THEN
+C          CALL AERROR(LIST,NAMARC,4)
+        END IF
+        GO TO 1
+      END IF
+C
+C
+C                     DOUBLE OVERLAP
+C
+C
+C      WRITE(INFOD,1013)LLINO
+C1013  FORMAT('Overlap between contigs',I8,' and',I8)
+C CHECKED
+      CALL SWRT2(INFOD, 'Overlap between contigs%8d and%8d%!',
+     +     LLINO(1), LLINO(2))
+      CALL INFO(INFOD)
+      IF(ANSJOK.NE.0) THEN
+C
+C  read overlaps 2 contigs but joins are forbidden
+C  stick in in one of the contigs but do not join
+C
+        IGOOD = 1
+        CALL INFO(
+     +  'Read overlaps 2 contigs: entering it at best site')
+        IF(ITOTPG(IGOOD).GT.0) CALL CCTA(SEQG2(1,IGOOD),IDIM22(IGOOD))
+C        WRITE(INFOD,1012)LLINO(IGOOD)
+        CALL SWRT1(INFOD,'Entering the new reading into contig%8d%!',
+     +       LLINO(IGOOD))
+        CALL INFO(INFOD)
+        CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +  SEQG2(1,IGOOD),NAMARC,JOINT(IGOOD),ITYPE(IGOOD),
+     +  ISENSE(IGOOD),SEQC2(1,IGOOD),ITOTPC(IGOOD),
+     +  IDIM22(IGOOD),IDOUT(IGOOD),LLINO(IGOOD),LINCON(IGOOD),
+     +  IFAIL(IGOOD),IDBSIZ,IDEV1,
+     +  MAXGEL,RNAMES)
+        IF(IFAIL(IGOOD).NE.0) THEN
+          CALL AERROR(LIST,NAMARC,3)
+          GO TO 1
+        END IF
+        JNGEL = JNGEL + 1
+        CALL UPDCON(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,NGELS,NCONTS,
+     +  SEQ1,MAXSEQ,IDIM1,ILEFTS(IGOOD),ILC(IGOOD),LINCON(IGOOD),
+     +  NAMPRO,SEQ2,
+     +  IDEV1,IFAIL(1),MAXGEL,IDM,PERCD,MASK,CLIST)
+        IF(IFAIL(1).NE.0) THEN
+          CALL ERROMF('Error calculating consensus')
+          GO TO 900
+        END IF
+        GO TO 1
+      END IF
+C
+C
+C
+      IF(LLINO(1).EQ.LLINO(2))THEN
+C
+C  read overlaps twice in one contig - stick it in the best place
+C
+        IGOOD = 1
+        CALL INFO(
+     +  'Read overlaps twice in one contig: entering it at best site')
+        IF(ITOTPG(IGOOD).GT.0) CALL CCTA(SEQG2(1,IGOOD),IDIM22(IGOOD))
+C        WRITE(INFOD,1012)LLINO(IGOOD)
+        CALL SWRT1(INFOD,'Entering the new reading into contig%8d%!',
+     +       LLINO(IGOOD))
+        CALL INFO(INFOD)
+        CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +  SEQG2(1,IGOOD),NAMARC,JOINT(IGOOD),ITYPE(IGOOD),
+     +  ISENSE(IGOOD),SEQC2(1,IGOOD),ITOTPC(IGOOD),
+     +  IDIM22(IGOOD),IDOUT(IGOOD),LLINO(IGOOD),LINCON(IGOOD),
+     +  IFAIL(IGOOD),IDBSIZ,IDEV1,
+     +  MAXGEL,RNAMES)
+        IF(IFAIL(IGOOD).NE.0) THEN
+          CALL AERROR(LIST,NAMARC,3)
+          GO TO 1
+        END IF
+        JNGEL = JNGEL + 1
+        CALL UPDCON(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,NGELS,NCONTS,
+     +  SEQ1,MAXSEQ,IDIM1,ILEFTS(IGOOD),ILC(IGOOD),LINCON(IGOOD),
+     +  NAMPRO,SEQ2,
+     +  IDEV1,IFAIL(1),MAXGEL,IDM,PERCD,MASK,CLIST)
+        IF(IFAIL(1).NE.0) THEN
+          CALL ERROMF('Error calculating consensus')
+          GO TO 900
+        END IF
+        GO TO 1
+      END IF
+C
+C is the overlap between the contigs too large?
+C
+      CALL AJOIN3(RELPG,IDBSIZ,LINCON,ITYPE,ISENSE,JOINT,
+     +IDIM22,KLASS,IOVER,PL,PR)
+C      WRITE(INFOD,1002)IOVER
+C1002  FORMAT('Length of overlap between the contigs',I6)
+C CHECKED
+      CALL SWRT1(INFOD,'Length of overlap between the contigs%6d%!',
+     +     IOVER)
+      CALL INFO(INFOD)
+      IF(IOVER.GT.MAXOVR)THEN
+        CALL INFO('Overlap too large: entry only')
+C
+C cannot align the two contigs, so try to enter the reading into one of them
+C
+        IFAIL(2)=1
+        IGOOD=0
+        IF(IFAIL(1).EQ.0)IGOOD=1
+        IF(IFAIL(2).EQ.0)IGOOD=2
+        IF(IGOOD.EQ.0) THEN
+          CALL AERROR(LIST,NAMARC,2)
+          JOINF = JOINF + 1
+          GO TO 1
+        END IF
+        IF(ITOTPG(IGOOD).GT.0) CALL CCTA(SEQG2(1,IGOOD),IDIM22(IGOOD))
+C        WRITE(INFOD,1012)LLINO(IGOOD)
+        CALL SWRT1(INFOD,'Entering the new reading into contig%8d%!',
+     +       LLINO(IGOOD))
+        CALL INFO(INFOD)
+        CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +  SEQG2(1,IGOOD),NAMARC,JOINT(IGOOD),ITYPE(IGOOD),
+     +  ISENSE(IGOOD),SEQC2(1,IGOOD),ITOTPC(IGOOD),
+     +  IDIM22(IGOOD),IDOUT(IGOOD),LLINO(IGOOD),LINCON(IGOOD),
+     +  IFAIL(IGOOD),IDBSIZ,IDEV1,
+     +  MAXGEL,RNAMES)
+        IF(IFAIL(IGOOD).NE.0) THEN
+          CALL AERROR(LIST,NAMARC,3)
+          JOINF = JOINF + 1
+          GO TO 1
+        END IF
+        JNGEL = JNGEL + 1
+        CALL UPDCON(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,NGELS,NCONTS,
+     +  SEQ1,MAXSEQ,IDIM1,ILEFTS(IGOOD),ILC(IGOOD),LINCON(IGOOD),
+     +  NAMPRO,SEQ2,
+     +  IDEV1,IFAIL(1),MAXGEL,IDM,PERCD,MASK,CLIST)
+        IF(IFAIL(1).NE.0) THEN
+          CALL ERROMF('Error calculating consensus')
+          GO TO 900
+        END IF
+C        WRITE(INFOD,1020)LLINO
+        CALL SWRT2(INFOD, 'Could not join contigs%8d and%8d%!',
+     +       LLINO(1), LLINO(2))
+        CALL INFO(INFOD)
+C1020    FORMAT('Could not join contigs',I8,' and',I8)
+C1021    FORMAT('Reading has been entered into contig',I8)
+C        WRITE(INFOD,1021)LLINO(IGOOD)
+        CALL SWRT1(INFOD, 'Reading has been entered into contig%8d%!',
+     +       LLINO(IGOOD))
+        CALL INFO(INFOD)
+        JOINF = JOINF + 1
+        GO TO 1
+      END IF
+C   WHICH CONTIG IS LEFTMOST?
+      LMOST=1
+      RMOST=2
+      IF(PL(1).GT.PL(2))THEN
+        LMOST=2
+        RMOST=1
+      END IF
+C   SAVE LENGTH OF RMOST CONTIG FOR DELETION STEP LATER
+      ILCR=ILC(RMOST)
+      IF(ITOTPG(LMOST).GT.0) CALL CCTA(SEQG2(1,LMOST),IDIM22(LMOST))
+C      WRITE(INFOD,1012)LLINO(LMOST)
+C CHECKED
+      CALL SWRT1(INFOD,'Entering the new reading into contig%8d%!',
+     +     LLINO(LMOST))
+      CALL INFO(INFOD)
+C1012  FORMAT('Entering the new reading into contig',I8)
+      CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +SEQG2(1,LMOST),NAMARC,JOINT(LMOST),ITYPE(LMOST),
+     +ISENSE(LMOST),SEQC2(1,LMOST),ITOTPC(LMOST),
+     +IDIM22(LMOST),IDOUT(LMOST),LLINO(LMOST),LINCON(LMOST),
+     +IFAIL(LMOST),IDBSIZ,IDEV1,
+     +MAXGEL,RNAMES)
+      IF(IFAIL(LMOST).NE.0) THEN
+        CALL AERROR(LIST,NAMARC,3)
+        JOINF = JOINF + 1
+        GO TO 1
+      END IF
+      JNGEL = JNGEL + 1
+      CALL UPDCON(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,NGELS,NCONTS,
+     +  SEQ1,MAXSEQ,IDIM1,ILEFTS(LMOST),ILC(LMOST),LINCON(LMOST),
+     +  NAMPRO,SEQ2,
+     +  IDEV1,IFAIL(1),MAXGEL,IDM,PERCD,MASK,CLIST)
+      IF(IFAIL(1).NE.0) THEN
+        CALL ERROMF('Error calculating consensus')
+        GO TO 900
+      END IF
+      IF(ITYPE(LMOST).EQ.1)LLINO(LMOST)=NGELS
+      IF(ILEFTS(LMOST).LT.ILEFTS(RMOST))THEN
+        ILEFTS(RMOST)=ILEFTS(RMOST) + 
+     +  (RELPG(LINCON(LMOST)) - ILC(LMOST))
+      END IF
+      ILC(LMOST) =  RELPG(LINCON(LMOST))
+      DO 500 I=1,2
+        IF(ISENSE(I).EQ.-1)THEN
+          CALL CMPLMT(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,LINCON(I),
+     +    LLINO(I),SEQ2,IDBSIZ,IDEV1,MAXGEL)
+          CALL SQREV(SEQ1(ILEFTS(I)),ILC(I))
+          CALL SQCOMM(SEQ1(ILEFTS(I)),ILC(I))
+          KT=IDIM1
+          CALL ADDTIT(SEQ1((ILEFTS(I)-20)),NAMPRO,LNBR(LINCON(I)),KT)
+        END IF
+500   CONTINUE
+C   NEED TO KNOW POSITION OF OVERLAP RELATIVE TO CONTIG, TO CONSENSUS
+C   WHICH BITS TO SEND TO ALIGNMENT ROUTINES
+C   SET UP FOR ALINE (NOTE RMOST IS EQUIVALENT TO THE GEL READING AND
+C   SO IS SLID ALONG THE LMOST CONTIG. THE SECTION SENT TO ALINE MUST 
+C   BE OF LENGTH < MAXGEL-2*MAX(MAXPC,MAXPG)
+C   IT MUST START AT POSITION 1 IN THE RMOST CONTIG AND EXTEND
+      IPOSC(LMOST)=PL(RMOST)+RELPG(NGELS)-1
+      ILCT = RELPG(LINCON(LMOST)) - RELPG(NGELS) - PL(RMOST) + 2 
+     +       + MAXPC
+C
+C change 5-6-95 line below to line above
+C
+C      ILCT = RELPG(LINCON(LMOST)) - RELPG(NGELS) - PL(RMOST) + 2
+      ILC(RMOST)=MIN(ILCT,ILC(RMOST))
+C      WRITE(*,*)'ILC(LMOST)',ILC(LMOST)
+C      WRITE(*,*)'RELPG(LINCON(LMOST))',RELPG(LINCON(LMOST))
+C      WRITE(*,*)'RELPG(NGELS)',RELPG(NGELS)
+C      WRITE(*,*)'PL(RMOST)',PL(RMOST)
+C      WRITE(*,*)'LENGTH OF OVERLAP',ILC(RMOST)
+      IPOSC(RMOST)=1
+      IDOUT(LMOST)=MAXGEL
+      IDOUT(RMOST)=MAXGEL
+      IDSAV=MAXSAV
+C  ON INPUT TO ALINE ILC(RMOST) CONTAINS THE OVERLAP LENGTH
+C  ON OUTPUT IT CONTAINS THE LENGTH OF THE ALIGNED SECTION (IE INCLUDING 
+C  PADS)
+      CALL INFO('Trying to align the two contigs')
+      CALL ALINE(SEQ1(ILEFTS(LMOST)),SEQ1(ILEFTS(RMOST)),
+     +SEQC2(1,RMOST),SEQC2(1,LMOST),SAVPS,SAVPG,SAVL,IDSAV,
+     +ILC(LMOST),ILC(RMOST),IDOUT(LMOST),IPOSC(LMOST),IPOSC(RMOST),
+     +MINSLI,JOINT(LMOST),ITOTPC(LMOST),ITOTPC(RMOST),IFAIL(1),
+     +ITYPE(1),MAXPC,MAXPC,PERMAX,SEQ4,MAXGEL,Z,LENO,ISHOW,MASK,1)
+C SEQC2(1,LMOST)  NOW CONTAINS THE ALIGNED SECTION OF THE LMOST CONTIG
+C SEQC2(1,RMOST)  NOW CONTAINS THE ALIGNED SECTION OF THE RMOST CONTIG
+C ILC(RMOST)  IS NOW THE LENGTH OF ALIGNED SECTION OF THE RMOST CONTIG
+C IDOUT(LMOST)  IS NOW THE LENGTH OF ALIGNED SECTION OF THE LMOST CONTIG
+C JOINT(LMOST)  IS THE POSITION OF THE JOIN RLETIVE TO THE LMOST CONTIG
+C ITYPE IS TYPE OF OVERLAP (-1 = RIGHT END OR INTERNAL, 1 = LEFT END)
+C  NB SHOULD ALWAYS BE -1
+C  IF THIS HAS BEEN DONE OK WE CAN EDIT THE TWO CONTIGS THEN JOIN
+      IF(IFAIL(1).NE.0)THEN
+        CALL INFO('Failed to align the two overlapping contigs')
+C        CALL AERROR(LIST,NAMARC,4)
+        JOINF = JOINF + 1
+        GO TO 1
+      END IF
+      IF(ITOTPC(LMOST).GT.0)THEN
+C        WRITE(INFOD,1017)LLINO(LMOST)
+C CHECKED
+        CALL SWRT1(INFOD,'Editing contig%8d%!',LLINO(LMOST))
+        CALL INFO(INFOD)
+C1017    FORMAT('Editing contig',I8)
+        CALL ABEDIN(RELPG,LNGTHG,LNBR,RNBR,
+     +  NGELS,NCONTS,SEQ3,LINCON(LMOST),JOINT(LMOST),SEQC2(1,LMOST),
+     +  ITOTPC(LMOST),IDOUT(LMOST),IDBSIZ,IDEV1,
+     +  MAXGEL)
+      END IF
+      JOINT(RMOST)=1
+      IDOUT(RMOST)=ILC(RMOST)
+      IF(ITOTPC(RMOST).GT.0)THEN
+C        WRITE(INFOD,1017)LLINO(RMOST)
+C CHECKED
+        CALL SWRT1(INFOD,'Editing contig%8d%!',LLINO(RMOST))
+        CALL INFO(INFOD)
+        CALL ABEDIN(RELPG,LNGTHG,LNBR,RNBR,
+     +  NGELS,NCONTS,SEQ3,LINCON(RMOST),JOINT(RMOST),SEQC2(1,RMOST),
+     +  ITOTPC(RMOST),IDOUT(RMOST),IDBSIZ,IDEV1,
+     +  MAXGEL)
+      END IF
+      ILC(RMOST)=ILCR
+      LTL=LNBR(LINCON(LMOST))
+      LTR=LNBR(LINCON(RMOST))
+C      WRITE(INFOD,1018)LNBR(LINCON(LMOST)),LNBR(LINCON(RMOST))
+C CHECKED
+      CALL SWRT2(INFOD,
+     +     'Completing the join between contigs%8d and%8d%!',
+     +     LNBR(LINCON(LMOST)),LNBR(LINCON(RMOST)))
+      CALL INFO(INFOD)
+C1018  FORMAT('Completing the join between contigs',I8,' and',I8)
+      CALL AJOIN2(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,IDBSIZ,
+     +JOINT(LMOST),LTL,LTR,LINCON(LMOST),LINCON(RMOST),IDEV1)
+      LLINO(1)=LTL
+      IF(ILEFTS(LMOST).GT.ILEFTS(RMOST))THEN
+        CALL DELCON(SEQ1,ILEFTS(LMOST),ILC(LMOST),IDIM1)
+        CALL DELCON(SEQ1,ILEFTS(RMOST),ILC(RMOST),IDIM1)
+      END IF
+      IF(ILEFTS(RMOST).GE.ILEFTS(LMOST))THEN
+        CALL DELCON(SEQ1,ILEFTS(RMOST),ILC(RMOST),IDIM1)
+        CALL DELCON(SEQ1,ILEFTS(LMOST),ILC(LMOST),IDIM1)
+      END IF
+      LREG=1
+      RREG=JOINT(LMOST)
+      IGELC=LLINO(1)
+C      JOB = 1
+C
+C assume itask set above
+C
+C also need to add 1 to consensus position
+C
+      IDIM1 = IDIM1 + 1
+C
+C for precon need to find the contig line number after the join
+C
+      LINCON(LMOST) = GCLIN(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +IDBSIZ,IGELC)
+      IF (LINCON(LMOST).EQ.0) THEN
+        CALL ERROMF('Cannot find contig line! Quitting')
+        GO TO 900
+      END IF
+      CALL PRECN1(SEQ1,NAMPRO,PERCD,IDBSIZ,LINCON(LMOST),LREG,RREG,
+     +     ITASK,IDEV1,IDIM1,MAXGEL,MAXSEQ,IWING,NBAD,
+     +     ILADD,IRADD,IFAIL(1))
+      IF(IFAIL(1).NE.0) THEN
+        CALL ERROMF('Error calculating consensus')
+        GO TO 900
+      END IF
+      JNJOIN = JNJOIN + 1
+      IF(KFAIL.NE.0) THEN
+C        CALL AERROR(LIST,NAMARC,4)
+C        JOINF = JOINF + 1
+      END IF
+      GO TO 1
+900   CONTINUE
+      IF ((IOPT.EQ.1).OR.(IOPT.EQ.2).OR.(IOPT.EQ.5)) THEN
+      IOPTC = 6
+      IDSAV = CMPSEQ(IOPTC,CSEN,MINMAT,SAVPS,SAVPG,SAVL,IDSAV,
+     +SEQ1,SEQ2,
+     +MAXSEQ,MAXGEL)
+      END IF
+901   CONTINUE
+      CALL INFO('Batch finished')
+C      WRITE(INFOD,1030)JGEL
+C 1030 FORMAT(I8,' sequences processed')
+C CHECKED
+      CALL SWRT1(INFOD,'%8d sequences processed%!',JGEL)
+      CALL INFO(INFOD)
+C      WRITE(INFOD,1031)JNGEL
+C 1031 FORMAT(I8,' sequences entered into database')
+      CALL SWRT1(INFOD,'%8d sequences entered into database%!',JNGEL)
+      CALL INFO(INFOD)
+C      WRITE(INFOD,1032)JNJOIN
+C 1032 FORMAT(I8,' joins made')
+      CALL SWRT1(INFOD,'%8d joins made%!',JNJOIN)
+      CALL INFO(INFOD)
+C      WRITE(INFOD,1033)JOINF
+C 1033 FORMAT(I8,' joins failed')
+C CHECKED
+      CALL SWRT1(INFOD,'%8d joins failed%!',JOINF)
+      CALL INFO(INFOD)
+      END
+      SUBROUTINE DBAUTP(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +SEQ2,NAMARC,JOINT,ITYPE,ISENSE,SEQC2,ITOTPC,
+     +IDIM2,IDOUT,LLINO,LINCON,IFAIL,IDBSIZ,MAXDB,
+     +IDEV1,MAXGEL,IMATC,IEMPTY,
+     +RNAMES,IOPT)
+      INTEGER RELPG(MAXDB)
+      INTEGER LNGTHG(MAXDB),LNBR(MAXDB),RNBR(MAXDB)
+      CHARACTER SEQ2(MAXGEL),SEQC2(MAXGEL)
+      CHARACTER NAMARC*(*)
+      CHARACTER*(*) RNAMES(IDBSIZ)
+C  deals with entering all readings into contig 1 (IOPT=3)
+C  or all readings into new contigs (IOPT=4)
+      IF(IOPT.EQ.3) THEN
+        IF(IMATC.EQ.0) THEN
+          ITYPE=0
+          ISENSE=1
+          IDOUT=MAXGEL
+          CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +    SEQ2,NAMARC,JOINT,ITYPE,ISENSE,SEQC2,ITOTPC,
+     +    IDIM2,IDOUT,LLINO,LINCON,IFAIL,IDBSIZ,
+     +    IDEV1,MAXGEL,RNAMES)
+          IF(IFAIL.NE.0) RETURN
+          IEMPTY=0
+          IMATC = 1
+        ELSE
+          ITYPE= - 1
+          ISENSE=1
+          JOINT = 1
+          LLINO = NGELS
+          LINCON = IDBSIZ - NCONTS
+          ITOTPC = 0
+          IDOUT=MAXGEL
+          CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +    SEQ2,NAMARC,JOINT,ITYPE,ISENSE,SEQC2,ITOTPC,
+     +    IDIM2,IDOUT,LLINO,LINCON,IFAIL,IDBSIZ,
+     +    IDEV1,MAXGEL,RNAMES)
+          IF(IFAIL.NE.0) RETURN
+        END IF
+      ELSE IF(IOPT.EQ.4) THEN
+        ITYPE=0
+        ISENSE=1
+        IDOUT=MAXGEL
+        CALL AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +    SEQ2,NAMARC,JOINT,ITYPE,ISENSE,SEQC2,ITOTPC,
+     +    IDIM2,IDOUT,LLINO,LINCON,IFAIL,IDBSIZ,
+     +    IDEV1,MAXGEL,RNAMES)
+        IF(IFAIL.NE.0) RETURN
+      END IF
+      END
+C   SUBROUTINE TO ENTER NEW GEL SEQUENCES INTO DATA BASE.
+C   IT READS IN AN ARCHIVE VERSION AND WRITES OUT A WORKING VERSION.
+C   IT ALSO SETS UP ANY RELATIONSHIPS WITH OTHER DATA IN THE DATABASE
+C   BOTH BY POSITION IN A CONTIG AND POINTERS TO LEFT AND RIGHT
+C   NEIGHBOURS.
+      SUBROUTINE AENTER(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +GEL,NAMARC,X,ITYPE,ISENSE,SEQC2,ITOTPC,
+     +IDIM,IDC,NCONTC,LINCON,IFAIL,IDBSIZ,IDEVR,
+     +MAXGEL,RNAMES)
+C   AUTHOR: RODGER STADEN
+      INTEGER  RELPG(IDBSIZ),X,Y
+      INTEGER LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      CHARACTER GEL(MAXGEL),NAMARC*(*)
+      CHARACTER SEQC2(IDC)
+      CHARACTER NAMID*40,RNAMES(IDBSIZ)*40
+      CHARACTER INFOD*80
+      EXTERNAL INDB
+C      WRITE(*,*)'IN ENTER',NGELS
+C      WRITE(*,*)'X,ITYPE,ISENSE,IDIM,IDC'
+C      WRITE(*,*)X,ITYPE,ISENSE,IDIM,IDC
+C   SET FAIL FLAG
+      IFAIL=0
+C   IS THERE SPACE?
+      IF((IDBSIZ-(NGELS+NCONTS)).GT.2)GO TO 5
+C   FULL
+      CALL ERROMF('Database full!')
+      IFAIL=7
+      RETURN
+5     CONTINUE
+C   NEED TO CHECK TO SEE IF GEL ALREADY IN DB
+C   LOOK THRU ARC FILE
+      CALL IDLINE(NAMARC, NAMID)
+      J = INDB(NGELS,RNAMES,NAMID)
+      IF (J.NE.0) THEN
+C   FOUND
+C        WRITE(INFOD,1013)J
+C1013    FORMAT('New reading already in database with number',I8,
+C     +  ' Entry aborted')
+C CHECKED
+        CALL SWRT1(INFOD,
+     +'New reading already in database with number%8d Entry aborted%!',
+     +        J)
+        CALL ERROMF(INFOD)
+        IFAIL=6
+        RETURN
+      END IF
+C   INCREMENT NUMBER OF GELS
+      NGELS=NGELS+1
+C
+C set dummy int for idevn
+C
+      IDEVN = 0
+      CALL SINDB(IDEVN,NGELS,RNAMES,NAMID,2)
+C   SET LENGTH THIS GEL
+      LNGTHG(NGELS)=IDIM*ISENSE
+C      WRITE(INFOD,1003)NGELS
+C      WRITE(*,1003)NGELS
+C1003  FORMAT('This gel reading has been given the number ',I8)
+C CHECKED
+      CALL SWRT1(INFOD,
+     +     'This gel reading has been given the number %8d%!',
+     +     NGELS)
+      CALL INFO(INFOD)
+C   WRITE NAME OF ARCHIVE TO LIST OF ARCHIVES
+C   NAMPRO,ARC
+C      NAMARK=NAMARC(1:16)
+C      CALL WRITEN(IDEVN,NGELS,NAMARK)
+CC   WRITE GEL TO WORKING VERSION
+C      CALL WRITEW(IDEVW,NGELS,GEL,MAXGEL)
+C      IF(IDEVT.GT.0) CALL ENTRD(IDEVG,IDEVT,IDEVC,NAMARC,NGELS,IOK)
+CC   CREATE TAGS FOR THIS NASTY
+C      CALL TAGGEL(NGELS,LNGTHG(NGELS),GEL)
+C   SET UP RELATIONSHIPS
+C   DOES THIS GEL OVERLAP?
+      IF(ITYPE.NE.0)GO TO 100
+C
+C   DOES NOT OVERLAP SO IT STARTS A CONTIG OF ITS OWN
+C
+C   SET CONTIG POINTERS AND GENERAL VALUES
+C   INCREMENT NUMBER OF CONTIGS
+      NCONTS=NCONTS+1
+C   POINTER TO THIS CONTIG
+      N=IDBSIZ-NCONTS
+C   POINTER TO LEFT GEL THIS CONTIG
+      LNBR(N)=NGELS
+C   POINTER TO RIGHT GEL THIS CONTIG
+      RNBR(N)=NGELS
+C   LENGTH OF CONTIG
+      RELPG(N)=IDIM
+C   WRITE CONTIG DESCRIPTOR
+      CALL WRITEC(IDEVR,IDBSIZ-N,RELPG(N),
+     +LNBR(N),RNBR(N))
+C     Setup tags, original positions, conf values, vectors etc
+      CALL STIKIT(IDEVR,NAMARC,NGELS,LNGTHG(NGELS),GEL,MAXGEL,IOK,
+     +     IDBSIZ-N, 1)
+      IF (IOK.NE.0) THEN
+         NCONTS=NCONTS-1
+         NGELS=NGELS-1
+         IFAIL=1
+         RETURN
+      ENDIF
+C
+C   Create gel info
+C   SET LEFT AND RIGHT POINTERS TO ZERO,RELPG TO 1
+      LNBR(NGELS)=0
+      RNBR(NGELS)=0
+      RELPG(NGELS)=1
+C   WRITE NEW GEL LINE
+      CALL WRITEG(IDEVR,NGELS,RELPG(NGELS),LNGTHG(NGELS),
+     +LNBR(NGELS),RNBR(NGELS))
+C   WRITE DB DESCRIPTOR
+       CALL WRITRN(IDEVR,NGELS,NCONTS)
+      RETURN
+C
+100   CONTINUE
+C
+C
+C     Shift tags if this new gel adjusts the left end
+C
+      IF (ITYPE.EQ.1) THEN
+         CALL SHIFTT(IDEVR, IDBSIZ-LINCON, 1, X-1)
+         ITMP = 1
+      ELSE
+         ITMP = X
+      ENDIF
+C     Setup tags, original positions, conf values, vectors etc
+      CALL STIKIT(IDEVR,NAMARC,NGELS,LNGTHG(NGELS),GEL,MAXGEL,IOK,
+     +     IDBSIZ-LINCON, ITMP)
+      IF (IOK.NE.0) THEN
+         NGELS=NGELS-1
+         IFAIL=1
+         RETURN
+      ENDIF
+C
+C   DOES OVERLAP
+150   CONTINUE
+C
+C   LEFT END OR RIGHT OVERLAP?
+      IF(ITYPE.EQ.1)GO TO 400
+C   RIGHT END OR INTERNAL OVERLAP
+C
+160   CONTINUE
+C   NEED TO SEARCH THRU THIS CONTIG TO FIND LEFT AND RIGHT
+C   NEIGHBOURS FOR THIS NEW GEL
+C   LINE NUMBER OF LEFT END OF CONTIG
+      N=NCONTC
+C   LOOK THRU UNTIL CURRENT IS >= THEN IT MUST BE THE PREVIOUS ONE
+200   CONTINUE
+      IF(RELPG(N).GT.X)GO TO 250
+C   IS THIS THE LAST GEL IN CONTIG?
+      IF(RNBR(N).EQ.0)GO TO 350
+C   NO SO LOOK AT NEXT
+      N=RNBR(N)
+      GO TO 200
+250   CONTINUE
+C   GEL LIES BETWEEN N AND LNBR(N)
+C   NEED TO EDIT DB HERE
+      IF(ITOTPC.GT.0)CALL ABEDIN(RELPG,LNGTHG,LNBR,RNBR,
+     1NGELS,NCONTS,
+     2GEL,LINCON,X,SEQC2,ITOTPC,IDC,IDBSIZ,IDEVR,
+     +MAXGEL)
+C
+C
+C   SET POINTERS IN NEW GEL
+      LNBR(NGELS)=LNBR(N)
+      RNBR(NGELS)=N
+      RELPG(NGELS)=X
+C   WRITE NEW GEL LINE
+      CALL WRITEG(IDEVR,NGELS,RELPG(NGELS),LNGTHG(NGELS),
+     +LNBR(NGELS),RNBR(NGELS))
+C   SET POINTERS  IN LEFT AND RIGHT NEIGHBOURS
+      K=LNBR(N)
+      RNBR(K)=NGELS
+C      RNBR(LNBR(N))=NGELS
+C   WRITE LEFT AND RIGHT NEIGHBOURS
+      CALL WRITEG(IDEVR,K,RELPG(K),LNGTHG(K),
+     +LNBR(K),RNBR(K))
+      LNBR(N)=NGELS
+      CALL WRITEG(IDEVR,N,RELPG(N),LNGTHG(N),
+     +LNBR(N),RNBR(N))
+C   WRITE NGELS NCONTS
+      CALL WRITRN(IDEVR,NGELS,NCONTS)
+C   HAVE WE INCREASED LENGTH OF CONTIG?
+C   ITS LINE NUMBER IS LINCON
+C   NEED TO UPDATE IDIM IN CASE OF EDITS
+      IDIM=ABS(LNGTHG(NGELS))
+      Y=X+IDIM-1
+      IF(Y.LE.RELPG(LINCON))RETURN
+      RELPG(LINCON)=Y
+C   WRITE NEW CONTIG LINE
+      CALL WRITEC(IDEVR,IDBSIZ-LINCON,RELPG(LINCON),
+     +LNBR(LINCON),RNBR(LINCON))
+      RETURN
+350   CONTINUE
+C   MUST BE A RIGHT END OVERLAP
+C   NEED TO EDIT DB HERE
+      IF(ITOTPC.GT.0)CALL ABEDIN(RELPG,LNGTHG,LNBR,RNBR,
+     1NGELS,NCONTS,
+     2GEL,LINCON,X,SEQC2,ITOTPC,IDC,IDBSIZ,IDEVR,
+     +MAXGEL)
+C
+C
+C   SET POINTERS FOR NEW GEL
+      LNBR(NGELS)=N
+      RNBR(NGELS)=0
+      RELPG(NGELS)=X
+C   WRITE NEW GEL LINE
+      CALL WRITEG(IDEVR,NGELS,RELPG(NGELS),LNGTHG(NGELS),
+     +LNBR(NGELS),RNBR(NGELS))
+C   OLD RIGHT END
+      RNBR(N)=NGELS
+C   WRITE NEW RIGHT LINE
+      CALL WRITEG(IDEVR,N,RELPG(N),LNGTHG(N),
+     +LNBR(N),RNBR(N))
+C   RESET RIGHT NAME IN CONTIG
+C   ITS LINE NUMBER IS LINCON
+      RNBR(LINCON)=NGELS
+C   HAVE WE INCREASED LENGTH OF CONTIG?
+C   NEED TO UPDATE LENGTH OF GEL IN CASE OF EDITS
+      IDIM=ABS(LNGTHG(NGELS))
+      Y=X+IDIM-1
+      RELPG(LINCON)=MAX(RELPG(LINCON),Y)
+C   WRITE HERE
+C   WRITE CONTIG DESCRIPTOR
+      CALL WRITEC(IDEVR,IDBSIZ-LINCON,RELPG(LINCON),
+     +LNBR(LINCON),RNBR(LINCON))
+      CALL WRITRN(IDEVR,NGELS,NCONTS)
+      RETURN
+C
+400   CONTINUE
+C
+C   ADDING TO LEFT END
+410   CONTINUE
+C   NEED TO EDIT DB HERE
+      IF(ITOTPC.GT.0)CALL ABEDIN(RELPG,LNGTHG,LNBR,RNBR,
+     1NGELS,NCONTS,
+     2GEL,LINCON,1,SEQC2,ITOTPC,IDC,IDBSIZ,IDEVR,
+     +MAXGEL)
+C
+420   CONTINUE
+C   SET POINTERS IN NEW GEL
+      RELPG(NGELS)=1
+      RNBR(NGELS)=NCONTC
+      LNBR(NGELS)=0
+C   WRITE NEW GEL LINE
+      CALL WRITEG(IDEVR,NGELS,RELPG(NGELS),LNGTHG(NGELS),
+     +LNBR(NGELS),RNBR(NGELS))
+C   SET POINTERS IN OLD LEFT END
+      LNBR(NCONTC)=NGELS
+      RELPG(NCONTC)=X
+C   WRITE NEW LEFT END
+      CALL WRITEG(IDEVR,NCONTC,RELPG(NCONTC),LNGTHG(NCONTC),
+     +LNBR(NCONTC),RNBR(NCONTC))
+C   NEW LENGTH OF CONTIG
+      RELPG(LINCON)=RELPG(LINCON)+X-1
+C   MAY HAVE JUST ADDED A GEL LONGER THAN CONTIG
+      IDIM=ABS(LNGTHG(NGELS))
+      Y=IDIM
+      IF(Y.GT.RELPG(LINCON))RELPG(LINCON)=Y
+C   NEW NAME OF LEFT END OF CONTIG
+      LNBR(LINCON)=NGELS
+C   WRITE CONTIG DESCRIPTOR
+      CALL WRITEC(IDEVR,IDBSIZ-LINCON,RELPG(LINCON),
+     +LNBR(LINCON),RNBR(LINCON))
+      CALL WRITRN(IDEVR,NGELS,NCONTS)
+C   NOW GO THRU AND CHANGE ALL RELATIVE POSITIONS
+      N=NCONTC
+440   CONTINUE
+      IF(RNBR(N).EQ.0)RETURN
+      N=RNBR(N)
+      RELPG(N)=RELPG(N)+X-1
+C   WRITE NEW LINE
+      CALL WRITEG(IDEVR,N,RELPG(N),LNGTHG(N),
+     +LNBR(N),RNBR(N))
+      GO TO 440
+      END
+C      ABEDIN
+C
+C   ROUTINE TO EDIT THE DB USING A PADDED SEQ
+C   HAVE AN ARRAY SEQC2 LENGTH IDC OF PADDED SECTION OF CONTIG LINCON
+C  THE LEFT END OF THE PADDED CONTIG STARTS AT X
+C   THERE ARE ITOTPC PADS TO MAKE
+C
+      SUBROUTINE ABEDIN(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +GEL,LINCON,X,SEQC2,ITOTPC,IDC,IDBSIZ,IDEVR,
+     +MAXGEL)
+C   AUTHOR: RODGER STADEN
+      INTEGER  RELPG(IDBSIZ),X,POSN
+      INTEGER LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      CHARACTER SEQC2(IDC),GEL(MAXGEL),P
+      SAVE P
+      DATA P/','/
+C
+C   POINT TO CONTIG
+      POSN=X-1
+C   POINT TO SEQC2
+      IAT=0
+C   COUNT PADS DONE
+      IDONE=0
+C   LOOP FOR ALL SEQC2
+      DO 100 J=1,IDC
+      POSN=POSN+1
+      IAT=IAT+1
+      IPAD=0
+C   IS THIS A PADDING CHAR?
+      IF(SEQC2(IAT).NE.P)GO TO 100
+50    CONTINUE
+C   COUNT PADS
+      IPAD=IPAD+1
+      IAT=IAT+1
+      IF(SEQC2(IAT).EQ.P)GO TO 50
+C   END OF THIS STRETCH OF PADS,DO INSERT
+C   HAVE IPAD INSERTS TO MAKE AT POSN
+C      WRITE(*,*)'LINCON,POSN,IPAD',LINCON,POSN,IPAD
+      CALL PADCON(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +GEL,LINCON,POSN,IPAD,IDBSIZ,IDEVR,MAXGEL)
+C   MOVE POINTER TO CONTIG
+      POSN=POSN+IPAD
+C   COUNT PADS DONE
+      IDONE=IDONE+IPAD
+C   ANY MORE TO DO?
+      IF(IDONE.EQ.ITOTPC)GO TO 101
+100   CONTINUE
+C   ERROR SHOULD HAVE DONE ALL PADS
+      CALL ERROMF('Problem: some pads were not done!')
+101   CONTINUE
+      END
+      SUBROUTINE ADDTIT(SEQ1,NAMPRO,NGELS,IDIM1)
+C   AUTHOR: RODGER STADEN
+      CHARACTER SEQ1(20),NAMPRO*(*)
+      CALL CADTIT(SEQ1, NAMPRO, NGELS)
+      IDIM1=IDIM1+20
+      END
+      SUBROUTINE ADISM3(ISAVPS,SAVPG,CENDS,NENDS,
+     +IDCEND,MAXCON,ILEFTS,ILC,IPOSC,IPOSG,ISENSE,LLINO,IMATC,ISTRAN,
+     +NEXTC,MAXC,JJ,ISAVL,LMATCH)
+C   AUTHOR: RODGER STADEN
+      INTEGER ILEFTS(MAXC),ILC(MAXC),IPOSC(MAXC),IPOSG(MAXC)
+      INTEGER ISENSE(MAXC),LLINO(MAXC)
+      INTEGER SAVPS,SAVPG,CENDS(MAXCON)
+      INTEGER NENDS(MAXCON)
+      SAVPS=ISAVPS-19
+      JJ=1
+C
+C we have a match isavps, isavpg, isavl (pos in consensus, gel, length)
+C 1. which contig is it in? --> JJ
+C 2. save pos of contig, pos in contig, contig length, contig number, sense
+C
+C      WRITE(*,*)'ENTER ADISM3, IMATC',IMATC
+      DO 5 J=2,IDCEND
+        IF(SAVPS.GT.CENDS(J))GO TO 5
+        JJ=J-1
+        GO TO 6
+5     CONTINUE
+      JJ=IDCEND
+6     CONTINUE
+      SAVPS=SAVPS-1
+      LCL=SAVPS-CENDS(JJ)
+      LCR=CENDS(JJ+1)-ISAVPS-1
+      NEXTC=CENDS(JJ+1)+20
+      IF(IMATC.LE.MAXC) THEN
+        ILEFTS(IMATC)=CENDS(JJ)+20
+        ILC(IMATC)=LCL+LCR+1
+        IPOSC(IMATC)=LCL+1
+        IPOSG(IMATC)=SAVPG
+        LLINO(IMATC)=NENDS(JJ)
+        ISENSE(IMATC)=1
+        IF(ISTRAN.EQ.2)ISENSE(IMATC)=-1
+        LMATCH = ISAVL
+C        WRITE(INFOD,1000)LLINO(IMATC),IPOSC(IMATC),ISTRAN,
+C     +  IPOSG(IMATC)
+C 1000   FORMAT
+C     +  ('Contig',I8,' position',I8,' matches strand',I2,
+C     +  ' at position',I8)
+C        CALL INFO(INFOD)
+      ELSE
+        CALL ERROMF('Warning: too many overlaps')
+      END IF
+      END
+      SUBROUTINE ADISM4(IDIM,IDIMG,SAVPS,SAVPG,SAVL,IDSAV,
+     +CENDS,NENDS,IDCEND,MAXCON,ILEFTS,ILC,IPOSC,IPOSG,ISENSE,
+     +LLINO,IMATC,ISTRAN,MAXC)
+C   AUTHOR: RODGER STADEN
+      INTEGER ILEFTS(MAXC),ILC(MAXC),IPOSC(MAXC),IPOSG(MAXC)
+      INTEGER ISENSE(MAXC),LLINO(MAXC)
+      INTEGER CENDS(MAXCON)
+      INTEGER NENDS(MAXCON)
+      INTEGER SAVPS(IDSAV),SAVPG(IDSAV),SAVL(IDSAV)
+C      CHARACTER INFOD*80
+C      WRITE(*,*)'ENTER ADISM4    , IMATC',IMATC
+      NEXTC=IDIM+1
+C
+C sort on position in consensus
+C
+      CALL BUB3AS(SAVPS,SAVPG,SAVL,IDSAV)
+C      DO 123 II = 1,IDSAV
+C        WRITE(*,*)II,SAVPS(II),SAVPG(II),SAVL(II)
+C 123    CONTINUE
+        IMATC=IMATC+1
+C      WRITE(*,*)'IN ADISM4, UPDATED IMATC',IMATC
+C
+C get the contig info for the first match
+C
+C        WRITE(*,*)'sav1',SAVL(1)
+C we have a match savps, savpg, savl (pos in consensus, gel, length)
+C 2. save pos of contig, pos in contig, contig length, contig number, sense
+        CALL ADISM3(SAVPS(1),SAVPG(1),CENDS,NENDS,IDCEND,MAXCON,
+     +  ILEFTS,ILC,IPOSC,IPOSG,ISENSE,LLINO,IMATC,ISTRAN,NEXTC,MAXC,
+     +  LASTC,SAVL(1),LMATCH)
+C
+C now decide when a match is with a new contig and get the relevant info.
+C Decide its the same overlap if it is covered by the previous gel position
+C If we want to record the longest match for each overlap we should test
+C here to see if overlapping ones are longer than the one weve recorded
+C
+      LEND=IDIMG-SAVPG(1)+SAVPS(1)
+      DO 10 I=2,IDSAV
+C         WRITE(*,*)SAVPS(I),SAVPG(I)
+C         WRITE(*,*)'SAVPS(I)-SAVPG(I)',SAVPS(I)-SAVPG(I)
+C        WRITE(*,*)'savl(I),lend',SAVL(I),LEND
+        IF((SAVPS(I).LT.LEND).AND.(SAVPS(I).LT.NEXTC)) THEN
+C
+C test here if this match is longer
+C
+          IF(SAVL(I).GT.LMATCH) THEN
+C
+C next test added 22-11-94 because the trap in adism3 is insufficient
+C
+            IF(IMATC.LE.MAXC) THEN
+               IPOSC(IMATC) = SAVPS(I) - CENDS(LASTC) + 1 - 20
+               IPOSG(IMATC) = SAVPG(I)
+               LMATCH = SAVL(I)
+C              WRITE(*,*)'new best g,c,l',IPOSG(IMATC),IPOSC(IMATC),LMATCH
+            END IF
+          END IF
+          GO TO 10
+        END IF
+C         WRITE(*,*)'2SAVPS(I)-SAVPG(I)',SAVPS(I)-SAVPG(I)
+C         WRITE(*,*)IPOSC(IMATC),IPOSG(IMATC),SAVPS(I),SAVPG(I)
+        IMATC=IMATC+1
+C      WRITE(*,*)'IN ADISM4, UPDATED AGAIN IMATC',IMATC
+C we have a match savps, savpg, savl (pos in consensus, gel, length)
+C 2. save pos of contig, pos in contig, contig length, contig number, sense
+        CALL ADISM3(SAVPS(I),SAVPG(I),CENDS,NENDS,IDCEND,MAXCON,
+     +  ILEFTS,ILC,IPOSC,IPOSG,ISENSE,LLINO,IMATC,ISTRAN,NEXTC,MAXC,
+     +  LASTC,SAVL(I),LMATCH)
+        LEND=IDIMG-SAVPG(I)+SAVPS(I)
+C        RSTART = SAVPS(I) - SAVPG(I)
+10    CONTINUE
+      IMATC = MIN(IMATC,MAXC)
+C      WRITE(*,*)'IN ADISM4, LAST IMATC',IMATC
+      END
+CC    AJOIN2
+CC   COMPLETES JOIN AND RETURNS LENGTH OF NEW CONTIG IN LLINOR
+      SUBROUTINE AJOIN2(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,IDBSIZ,
+     +RELX,LLINOL,LLINOR,LNCONL,LNCONR,IDEVR)
+C   AUTHOR: RODGER STADEN
+      INTEGER RELPG(IDBSIZ)
+      INTEGER LNBR(IDBSIZ),RNBR(IDBSIZ),LNGTHG(IDBSIZ)
+      INTEGER RELX
+C   RELX IS THE POSITION OF THE JOINT
+C   LLINOL IS THE LEFT GEL NUMBER OF THE LEFT CONTIG
+C   LLINOR IS THE LEFT GEL OF THE RIGHT CONTIG
+C   LNCONL IS THE LEFT CONTIG LINE NUMBER
+C   LNCONR IS THE RIGHT CONTIG LINE NUMBER
+C
+C   ADJUST ALL RELATIVE POSITIONS IN RIGHT CONTIG
+      N=LLINOR
+      RELPG(N)=RELX
+50    CONTINUE
+      IF(RNBR(N).EQ.0)GO TO 60
+      N=RNBR(N)
+      RELPG(N)=RELPG(N)+RELX-1
+      GO TO 50
+60    CONTINUE
+C
+C   FIX UP NEW GEL LINE FOR OLD LEFT OF RIGHT CONTIG
+      LNBR(LLINOR)=RNBR(LNCONL)
+C   FIX UP RIGHT GEL OF LEFT CONTIG
+      N=RNBR(LNCONL)
+      RNBR(N)=LLINOR
+C   MERGE WILL SORT OUT THE CORRECT NEIGHBOURS
+C
+      CALL MERGE(RELPG,LNGTHG,LNBR,RNBR,LNCONL,IDBSIZ)
+C   MERGE DOES NOT WRITE TO DISK
+      N=LNBR(LNCONL)
+65    CONTINUE
+C      WRITE(IDEVR,REC=N)RELPG(N),LNGTHG(N),LNBR(N),RNBR(N)
+      CALL WRITEG(IDEVR,N,RELPG(N),LNGTHG(N),LNBR(N),RNBR(N))
+      N=RNBR(N)
+      IF(N.NE.0)GO TO 65
+C   Merge annotation lists.
+      CALL MRGTAG(IDEVR, IDBSIZ-LNCONL, IDBSIZ-LNCONR, RELX-1)
+      CALL MRGNOT(IDEVR, IDBSIZ-LNCONR, IDBSIZ-LNCONL)
+C   CONTIG LINES
+      X=RELPG(LNCONR)+RELX-1
+C   LENGTH MAY NOT HAVE INCREASED!
+      IF(X.GT.RELPG(LNCONL))RELPG(LNCONL)=X
+C   SAVE LENGTH OF NEW CONTIG
+      RELX=RELPG(LNCONL)
+C      WRITE(IDEVR,REC=LNCONL)RELPG(LNCONL),LNGTHG(LNCONL),LNBR(LNCONL),
+C     1RNBR(LNCONL)
+      CALL WRITEC(IDEVR,IDBSIZ-LNCONL,RELPG(LNCONL),
+     +LNBR(LNCONL),RNBR(LNCONL))
+C   Now remove the old contig. We must use the C routine for this so that
+C   it can update the contig order, tag lists, etc.
+      CALL REMCNL(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,IDBSIZ,
+     +     LNCONR,IDEVR)
+      RETURN
+      END
+C     SUBROUTINE AJOIN3
+      SUBROUTINE AJOIN3(RELPG,IDBSIZ,LINCON,ITYPE,ISENSE,JOINT,IDIM22,
+     +KLASS,IOVER,PL,PR)
+C   AUTHOR: RODGER STADEN
+      INTEGER RELPG(IDBSIZ),LINCON(2),IDIM22(2)
+      INTEGER ITYPE(2),ISENSE(2),JOINT(2),PL(2),PR(2)
+C
+C   CALC POSITIONS OF CONTIGS RELATIVE TO FIXED GEL
+      DO 20 I=1,2
+C   R+
+      IF((ITYPE(I).NE.-1).OR.(ISENSE(I).NE.1))GO TO 11
+      PL(I)=-1*JOINT(I)+2
+      PR(I)=PL(I)+RELPG(LINCON(I))-1
+      GO TO 20
+C   L+
+11    CONTINUE
+      IF((ITYPE(I).NE.1).OR.(ISENSE(I).NE.1))GO TO 12
+      PL(I)=JOINT(I)
+      PR(I)=PL(I)+RELPG(LINCON(I))-1
+      GO TO 20
+C   R-
+12    CONTINUE
+      IF((ITYPE(I).NE.-1).OR.(ISENSE(I).NE.-1))GO TO 13
+      PR(I)=JOINT(I)+IDIM22(I)-1
+      PL(I)=PR(I)-RELPG(LINCON(I))+1
+      GO TO 20
+C   L-
+13    CONTINUE
+      PR(I)=IDIM22(I)-JOINT(I)+1
+      PL(I)=PR(I)-RELPG(LINCON(I))+1
+20    CONTINUE
+C  LENGTH OF OVERLAP
+      IOVER=MIN(PR(1),PR(2))-MAX(PL(1),PL(2))+1
+C
+C  CLASS NUMBER 1-16
+      KLASS=1
+      IF(ITYPE(1).EQ.1)KLASS=KLASS+8
+      IF(ISENSE(1).EQ.-1)KLASS=KLASS+4
+      IF(ITYPE(2).EQ.1)KLASS=KLASS+2
+      IF(ISENSE(2).EQ.-1)KLASS=KLASS+1
+      END
+C      ALINE
+C
+C    ROUTINE TO LINE UP 2 SEQS.
+C   IT SLIDES,REMOVES OVERLAPPING MATCHES,
+C   SORTS MATCHES INTO ASCENDING ORDER, THEN DOES DOES A TOPOLOGICAL
+C   CHECK, AND THEN PRODUCES 2 LINED UP SEQS WITH PADDING CHARS
+C   VARIABLES
+C       SEQ1 CONSENSUS
+C       SEQ2 GEL ORIGINAL IN CORRECT ORIENTATION
+C       SEQG2 ALIGNED GEL
+C       SEQC2 ALIGNED CONSENSUS
+C       SEQ3 SAVED GEL RAW DATA
+C       ISAV1,2,3 STORE MATCHES AND POSITIONS
+C       IDSAV NUMBER ISAV'S
+C       IDC LENGTH OF INPUT SEQ1
+C       IDIM2 LENGTH OF INPUT SEQ2
+C       IDOUT LENGTH OF OUTPUT ALIGNED SEQ1
+C       IDIM2 LENGTH OF SEQ2 ON OUTPUT AFTER ALIGNMENT
+C       MINSLI MIN MATCH FOR SLIDING
+C       IFAIL FLAG TO SHOW IF ALIGNMENT FAILED DUE TO TOO
+C   MANY MISMATCHES OR TOPOLIGICAL CHECK OR TOO MANY OR TOO MANY
+C   PADDING CHARS. 1=FAIL,0=PASS
+C
+      SUBROUTINE ALINE(SEQ1,SEQ2,SEQG2,SEQC2,ISAV1,ISAV2,ISAV3,
+     +IDSAV,IDC,IDIM2,IDOUT,IC1,IG1,MINSLI,JOINT,
+     +ITOTPC,ITOTPG,IFAIL,ITYPE,MAXPC,MAXPG,PERMAX,SEQ3,MAXGEL,
+     +PERCM,LENO,ISHOW,MASK,JRORC)
+C   AUTHOR: RODGER STADEN
+      CHARACTER SEQ1(IDC),SEQ2(IDIM2),SEQG2(IDOUT),SEQC2(IDOUT)
+      CHARACTER SEQ3(MAXGEL)
+      INTEGER ISAV1(IDSAV),ISAV2(IDSAV),ISAV3(IDSAV)
+      MINSLT=MINSLI
+      IDIM2I = IDIM2
+C
+C need to unmask both(for contig joins) sequences
+C
+C        CALL FMTDB(SEQ2,IDIM2,1,IDIM2,60,6)
+      IF (MASK.NE.0) THEN
+C        WRITE(*,*)'SEQ1 B'
+C        WRITE(*,*)(SEQ1(JJJ),JJJ=1,IDC)
+        CALL MASKC(SEQ1,IDC,2)
+C        WRITE(*,*)'SEQ1 A'
+C        WRITE(*,*)(SEQ1(JJJ),JJJ=1,IDC)
+C        WRITE(*,*)'SEQ2 B'
+C        WRITE(*,*)(SEQ2(JJJ),JJJ=1,IDIM2)
+        CALL MASKC(SEQ2,IDIM2,2)
+C        WRITE(*,*)'SEQ2 A'
+C        WRITE(*,*)(SEQ2(JJJ),JJJ=1,IDIM2)
+      END IF
+C        CALL FMTDB(SEQ2,IDIM2,1,IDIM2,60,6)
+C   SAVE SEQ2
+      CALL SQCOPY(SEQ2,SEQ3,IDIM2)
+      CALL MSTLKL(SEQ3,IDIM2)
+C        CALL FMTDB(SEQ3,IDIM2,1,IDIM2,60,6)
+      IFAIL=1
+C   FIND MATCHES
+      IPP=IDSAV
+C      WRITE(*,*)'IC1,IG1',IC1,IG1,MAXPG,MAXPC,MINSLT
+      CALL SLIDES(SEQ1,IDC,SEQ3,IDIM2,IC1,IG1,MAXPG,MAXPC,MINSLT,
+     +ISAV1,ISAV2,ISAV3,IPP)
+C      WRITE(*,*)'IPP',IPP,IDSAV
+      IF(IPP.GT.IDSAV) GO TO 50
+      IF(IPP.LT.1) GO TO 50
+      CALL REMOVL(ISAV2,ISAV3,ISAV1,IPP)
+C      WRITE(*,*)'IPP',IPP,IDSAV
+      CALL BUB3AS(ISAV2,ISAV3,ISAV1,IPP)
+C   DO TOPOLOGICAL CHECK
+      CALL TPCHEK(ISAV2,ISAV3,ISAV1,IPP)
+C
+C added next routine 27-2-93
+C
+C      WRITE(*,*)'IPP',IPP,IDSAV
+      CALL UPCHEK(ISAV2,ISAV3,ISAV1,IPP)
+C      WRITE(*,*)'IPP',IPP,IDSAV
+      CALL LINEUP(SEQ2,SEQ1,SEQG2,SEQC2,IDC,IDIM2,IDOUT,ISAV3,ISAV2,
+     +ISAV1,IPP,ITOTPC,ITOTPG,JOINT,ITYPE,MAXGEL,IFAIL)
+C       WRITE(*,*)'ITOTPC,ITOTPG',ITOTPC,ITOTPG,IFAIL
+C      IF(ITOTPC.GT.MAXPC)IFAIL=1
+C      IF(ITOTPG.GT.MAXPG)IFAIL=1
+      IF(IFAIL.NE.0) GO TO 50
+C   IDIM2 IS NOW LENGTH OF ALIGNED GEL
+      CALL DALIGN(SEQC2,SEQG2,SEQ3,MAXGEL,IDOUT,IDIM2,JOINT,
+     +ITYPE,PERCM,IFAIL,LENO,PERMAX,ISHOW,MAXPG,MAXPC,
+     +ITOTPG,ITOTPC)
+ 50   CONTINUE
+C
+C need to remask both(for contig joins) sequences
+C
+      IF (MASK.NE.0) THEN
+C        WRITE(*,*)'SEQ1 B1'
+C        WRITE(*,*)(SEQ1(JJJ),JJJ=1,IDC)
+        CALL MASKC(SEQ1,IDC,3)
+C        WRITE(*,*)'SEQ1 A1'
+C        WRITE(*,*)(SEQ1(JJJ),JJJ=1,IDC)
+C
+C only mask consensus data which is only lowercase where marked
+C
+C        WRITE(*,*)'SEQ2 B1'
+C        WRITE(*,*)(SEQ2(JJJ),JJJ=1,IDIM2I)
+        IF (JRORC.EQ.1) CALL MASKC(SEQ2,IDIM2I,3)
+C        WRITE(*,*)'SEQ2 A1'
+C        WRITE(*,*)(SEQ2(JJJ),JJJ=1,IDIM2I)
+      END IF
+      END
+      SUBROUTINE AUTOCN(SEQ1,IDIM,GEL,IDIMG,ILEFTS,ILC,IPOSC,
+     +IPOSG,ISENSE,LLINO,IMATC,IFCOMP,MINMAT,
+     +MAXGEL,MAXGLM,GELCOP,
+     +SAVPS,SAVPG,SAVL,MAXSAV,CENDS,NENDS,MAXCON,
+     +SEQG2,SEQC2,SEQ4,IDOUT,IDIM22,ITOTPG,ITOTPC,JOINT,IFAIL,
+     +ITYPE,MAXPC,MAXPG,PERMAX,MINSLI,SEQG3,SEQC3,KFAIL,
+     +JOBC,PERMIS,LENO,ISHOW,MASK,MINOVR)
+C   AUTHOR: RODGER STADEN
+C   changed 29-11-90 to make first in list of alignments the best
+      INTEGER ILEFTS(2),ILC(2),IPOSC(2),IPOSG(2),ISENSE(2),LLINO(2)
+      INTEGER SAVPS(MAXSAV)
+      INTEGER SAVPG(MAXSAV),SAVL(MAXSAV)
+      CHARACTER GELCOP(MAXGLM)
+      INTEGER CENDS(MAXCON),NENDS(MAXCON)
+      CHARACTER SEQ1(IDIM),GEL(MAXGLM)
+C
+      CHARACTER SEQG2(MAXGLM,2),SEQC2(MAXGLM,2),SEQ4(MAXGLM)
+      INTEGER IDOUT(2),IDIM22(2),ITOTPG(2),ITOTPC(2),JOINT(2)
+      INTEGER IFAIL(2),ITYPE(2)
+      PARAMETER (MAXC = 100)
+      CHARACTER SEQG3(MAXGLM),SEQC3(MAXGLM)
+      INTEGER JLEFTS(MAXC),JLC(MAXC),JPOSC(MAXC),JPOSG(MAXC)
+      INTEGER JSENSE(MAXC),JLLINO(MAXC),START
+      REAL PERMIS(2)
+      CHARACTER CSEN
+      CHARACTER INFOD*80
+      INTEGER CMPSEQ
+      EXTERNAL CMPSEQ
+      CSEN = 'f'
+C
+C jobc tells how to update the hash tables:
+C 0 means dont do anything because the consensus hasnt changed
+C 1 means add the last contig because a new one has been stuck on the end
+C 2 means do the whole consensus
+C
+      IFAIL(1) = 1
+      IFAIL(2) = 1
+      KFAIL = 0
+C  23-8-90 Need to deal with failures in a better way. Problem is
+C          case where overlaps are found but fail to align. In future
+C          signal them with new variable KFAIL which will be nonzero
+C          if any alignment fails.
+C  29-11-90 Changed sorting of overlaps so that the best is first in the 
+C           list returned to caller.
+C      WRITE(*,*)'MINMAT,ITOTPG,ITOTPC',MINMAT,ITOTPG,ITOTPC
+C      WRITE(*,*)'ISHOW,MASK,MINSLI',ISHOW,MASK,MINSLI
+C      WRITE(*,*)'MAXPG,MAXPC,PERMAX',MAXPG,MAXPC,PERMAX
+C   SAVE GEL
+      CALL SQCOPY(GEL,GELCOP,IDIMG)
+C  COUNT NUMBER OF CONTIGS THAT MATCH
+      IMATC=0
+      IDCEND=MAXCON
+      CALL BUSYF()
+C      WRITE(*,*)'IDIM',IDIM,IDCEND
+      CALL FNDCON(SEQ1,IDIM,CENDS,NENDS,IDCEND,MAXCON)
+      IF (JOBC.NE.0) THEN
+        START = 1
+        IF(JOBC.EQ.1) START = CENDS(IDCEND)
+        IOPTC = 2
+        IFCOMP = CMPSEQ(IOPTC,CSEN,MINMAT,SAVPS,SAVPG,SAVL,IDSAV,
+     +  SEQ1,GEL,
+     +  IDIM,IDIMG)
+        IF (IFCOMP.NE.0) RETURN
+      END IF
+1     CONTINUE
+      ISTRAN=1
+2     CONTINUE
+      CALL MSTLKL(GEL,IDIMG)
+      IDSAV=MAXSAV
+      IOPTC = 3
+      IFCOMP = CMPSEQ(IOPTC,CSEN,MINMAT,SAVPS,SAVPG,SAVL,IDSAV,
+     +SEQ1,GEL,
+     +IDIM,IDIMG)
+      IF (IFCOMP.LT.0) RETURN
+      IDSAV = IFCOMP
+      IF(IDSAV.NE.0)THEN
+        CALL ADISM4(IDIM,IDIMG,SAVPS,SAVPG,SAVL,IDSAV,CENDS,NENDS,
+     +  IDCEND,MAXCON,JLEFTS,JLC,JPOSC,JPOSG,JSENSE,JLLINO,
+     +  IMATC,ISTRAN,MAXC)
+      END IF
+      ISTRAN=ISTRAN+1
+      IF(ISTRAN.EQ.2) THEN
+        CALL SQCOPY(GELCOP,GEL,IDIMG)
+        CALL SQREV(GEL,IDIMG)
+        CALL SQCOM(GEL,IDIMG)
+        GO TO 2
+      END IF
+      CALL SQCOPY(GELCOP,GEL,IDIMG)
+      KSENSE = 0
+C      WRITE(INFOD,1000)IMATC
+C 1000 FORMAT('Total matches found',I6)
+C CHECKED
+      CALL SWRT1(INFOD, 'Total matches found%6d%!', IMATC)
+      CALL INFO(INFOD)
+      IF(IMATC.EQ.0) THEN
+        IFAIL(1) = 0
+        IFCOMP = 0
+        RETURN
+      END IF
+      DO 99 I = 1,IMATC
+C        WRITE(INFOD,1002)JLLINO(I),JPOSC(I),JSENSE(I),
+C     +  JPOSG(I)
+C 1002   FORMAT
+C     +  ('Contig',I8,' position',I8,' matches strand ',I2,
+C     +  ' at position',I8)
+C CHECKED
+        CALL SWRT4(INFOD,
+     +     'Contig%8d position%8d matches strand %2d at position%8d%!',
+     +     JLLINO(I),JPOSC(I),JSENSE(I), JPOSG(I))
+        CALL INFO(INFOD)
+ 99   CONTINUE
+      JMATC = 0
+      DO 100 I = 1,IMATC
+C
+C  3-10-95 New idea! have minimum overlap before allowing entry.
+C  Simplest place to apply is here (though not where it should
+C  be if we had started afresh)
+       LENOVR = MIN(JPOSG(I),JPOSC(I)) + 
+     + MIN(IDIMG-JPOSG(I),JLC(I)-JPOSC(I))
+       IF (LENOVR.LT.MINOVR) THEN
+C         WRITE(*,*)'SHORT OVERLAP',
+C     +   LENOVR,JPOSG(I),IDIMG,JPOSC(I),JLC(I)
+         GO TO 100
+       END IF
+C
+C
+C
+C         WRITE(*,*)'*******LONG OVERLAP',
+C     +   LENOVR,JPOSG(I),IDIMG,JPOSC(I),JLC(I)
+        IF(JSENSE(I).EQ.-1) THEN
+          IF(KSENSE.EQ.0) THEN 
+            CALL SQREV(GEL,IDIMG)
+            CALL SQCOM(GEL,IDIMG)
+            KSENSE = 1
+          END IF
+        END IF
+        JDIM22 = IDIMG
+        JDOUT = MAXGEL
+        IDSAV = MAXSAV
+C        WRITE(INFOD,1001)JLLINO(I)
+C 1001   FORMAT('Trying to align with contig ',I8)
+C CHECKED
+        CALL SWRT1(INFOD,'Trying to align with contig %8d%!',JLLINO(I))
+        CALL INFO(INFOD)
+        CALL ALINE(SEQ1(JLEFTS(I)),GEL,SEQG3,SEQC3,
+     +  SAVPS,SAVPG,SAVL,IDSAV,JLC(I),JDIM22,JDOUT,
+     +  JPOSC(I),JPOSG(I),MINSLI,JJOINT,JTOTPC,JTOTPG,
+     +  JFAIL,JTYPE,MAXPC,MAXPG,PERMAX,SEQ4,MAXGEL,PERMS,LENO,
+     +  ISHOW,MASK,0)
+        IF(JFAIL.EQ.0) THEN
+          JMATC = JMATC + 1
+          IF(JMATC.EQ.1) THEN
+C    Save in elements 1
+             CALL COPYM(JLEFTS(I),ILEFTS(1),JLC(I),ILC(1),
+     +          JPOSC(I),IPOSC(1),JSENSE(I),ISENSE(1),
+     +          JLLINO(I),LLINO(1),JJOINT,JOINT(1),JTOTPC,
+     +          ITOTPC(1),JTOTPG,ITOTPG(1),JTYPE,ITYPE(1),
+     +          JDOUT,IDOUT(1),JDIM22,IDIM22(1),
+     +          SEQG3,SEQG2(1,1),SEQC3,SEQC2(1,1),
+     +          PERMS,PERMIS(1))
+            IFAIL(1) = 0
+          ELSE IF(JMATC.EQ.2) THEN
+            IF(PERMS.LT.PERMIS(1)) THEN
+C    Better match so save in elements 1, so copy 1 to 2 first
+              CALL COPYM(ILEFTS(1),ILEFTS(2),ILC(1),ILC(2),
+     +          IPOSC(1),IPOSC(2),ISENSE(1),ISENSE(2),
+     +          LLINO(1),LLINO(2),JOINT(1),JOINT(2),ITOTPC(1),
+     +          ITOTPC(2),ITOTPG(1),ITOTPG(2),ITYPE(1),ITYPE(2),
+     +          IDOUT(1),IDOUT(2),IDIM22(1),IDIM22(2),
+     +          SEQG2(1,1),SEQG2(1,2),SEQC2(1,1),SEQC2(1,2),
+     +          PERMIS(1),PERMIS(2))
+                IFAIL(2) = 0
+C    Now save in 1
+                CALL COPYM(JLEFTS(I),ILEFTS(1),JLC(I),ILC(1),
+     +          JPOSC(I),IPOSC(1),JSENSE(I),ISENSE(1),
+     +          JLLINO(I),LLINO(1),JJOINT,JOINT(1),JTOTPC,
+     +          ITOTPC(1),JTOTPG,ITOTPG(1),JTYPE,ITYPE(1),
+     +          JDOUT,IDOUT(1),JDIM22,IDIM22(1),
+     +          SEQG3,SEQG2(1,1),SEQC3,SEQC2(1,1),
+     +          PERMS,PERMIS(1))
+            ELSE
+C    Save in element 2
+                CALL COPYM(JLEFTS(I),ILEFTS(2),JLC(I),ILC(2),
+     +          JPOSC(I),IPOSC(2),JSENSE(I),ISENSE(2),
+     +          JLLINO(I),LLINO(2),JJOINT,JOINT(2),JTOTPC,
+     +          ITOTPC(2),JTOTPG,ITOTPG(2),JTYPE,ITYPE(2),
+     +          JDOUT,IDOUT(2),JDIM22,IDIM22(2),
+     +          SEQG3,SEQG2(1,2),SEQC3,SEQC2(1,2),
+     +          PERMS,PERMIS(2))
+              IFAIL(2) = 0
+            END IF
+          ELSE
+            IF(PERMS.LT.PERMIS(1)) THEN
+C    Better match so save in elements 1, so copy 1 to 2 first
+              CALL COPYM(ILEFTS(1),ILEFTS(2),ILC(1),ILC(2),
+     +          IPOSC(1),IPOSC(2),ISENSE(1),ISENSE(2),
+     +          LLINO(1),LLINO(2),JOINT(1),JOINT(2),ITOTPC(1),
+     +          ITOTPC(2),ITOTPG(1),ITOTPG(2),ITYPE(1),ITYPE(2),
+     +          IDOUT(1),IDOUT(2),IDIM22(1),IDIM22(2),
+     +          SEQG2(1,1),SEQG2(1,2),SEQC2(1,1),SEQC2(1,2),
+     +          PERMIS(1),PERMIS(2))
+                IFAIL(2) = 0
+C    Now save in 1
+                CALL COPYM(JLEFTS(I),ILEFTS(1),JLC(I),ILC(1),
+     +          JPOSC(I),IPOSC(1),JSENSE(I),ISENSE(1),
+     +          JLLINO(I),LLINO(1),JJOINT,JOINT(1),JTOTPC,
+     +          ITOTPC(1),JTOTPG,ITOTPG(1),JTYPE,ITYPE(1),
+     +          JDOUT,IDOUT(1),JDIM22,IDIM22(1),
+     +          SEQG3,SEQG2(1,1),SEQC3,SEQC2(1,1),
+     +          PERMS,PERMIS(1))
+            ELSE IF(PERMS.LT.PERMIS(2)) THEN
+C    Save in element 2
+                CALL COPYM(JLEFTS(I),ILEFTS(2),JLC(I),ILC(2),
+     +          JPOSC(I),IPOSC(2),JSENSE(I),ISENSE(2),
+     +          JLLINO(I),LLINO(2),JJOINT,JOINT(2),JTOTPC,
+     +          ITOTPC(2),JTOTPG,ITOTPG(2),JTYPE,ITYPE(2),
+     +          JDOUT,IDOUT(2),JDIM22,IDIM22(2),
+     +          SEQG3,SEQG2(1,2),SEQC3,SEQC2(1,2),
+     +          PERMS,PERMIS(2))
+            END IF
+          END IF
+        ELSE
+          KFAIL = 1
+        END IF
+100   CONTINUE
+      IMATC = MIN(2,JMATC)
+      IFCOMP = 0
+      END
+C     BUBBL3
+C   SUBROUTINE TO SORT INTEGER ARRAY (LIST) INTO ASCENDING  ORDER
+C
+      SUBROUTINE CCTA(SEQ,ID)
+      CHARACTER SEQ(ID),COM,AS
+      SAVE COM,AS
+      DATA COM/','/,AS/'*'/
+      DO 10 I = 1,ID
+        IF(SEQ(I).EQ.COM) SEQ(I) = AS
+10    CONTINUE
+      END
+      SUBROUTINE COPYM(JLEFTS,ILEFTS,JLC,ILC,
+     +JPOSC,IPOSC,JSENSE,ISENSE,JLLINO,LLINO,
+     +JJOINT,JOINT,JTOTPC,ITOTPC,JTOTPG,ITOTPG,
+     +JTYPE,ITYPE,JDOUT,IDOUT,JDIM22,IDIM22,
+     +SEQG3,SEQG2,SEQC3,SEQC2,PERMS,PERMIS)
+      CHARACTER SEQG3(JDIM22),SEQG2(JDIM22),SEQC3(JDOUT),SEQC2(JDOUT)
+      ILEFTS = JLEFTS
+      ILC = JLC
+      IPOSC = JPOSC
+      ISENSE = JSENSE
+      LLINO = JLLINO
+      JOINT = JJOINT
+      ITOTPC = JTOTPC
+      ITOTPG = JTOTPG
+      ITYPE = JTYPE
+      IDOUT = JDOUT
+      IDIM22 = JDIM22
+      CALL SQCOPY(SEQG3,SEQG2,JDIM22)
+      CALL SQCOPY(SEQC3,SEQC2,JDOUT)
+      PERMIS = PERMS
+      END
+C     SUBROUTINE DALIGN
+C
+C   COUNTS MISMATCHES AND DISPLAYS OVERLAP.
+      SUBROUTINE DALIGN(SEQC2,SEQG2,SEQ3,MAXGEL,IDOUT,IDIM2,
+     +JOINT,ITYPE,X,IFAIL,LO,PERMAX,ISHOW,MAXPG,MAXPC,
+     +ITOTPG,ITOTPC)
+C   AUTHOR: RODGER STADEN
+      CHARACTER SEQC2(MAXGEL),SEQG2(MAXGEL),SEQ3(MAXGEL)
+C      CHARACTER PAD,DASH
+      CHARACTER INFOD*80,NAME1*15,NAME2*15
+      INTEGER CTONUM, FORTA
+      EXTERNAL CTONUM, FORTA
+C      SAVE PAD,DASH
+C      DATA PAD,DASH/',','-'/
+      IENDG=1
+      IENDC=JOINT
+C   ONLY LOOK AT OVERLAP WHICH IS FROM JOINT FOR LEFT TYPE JOIN
+      IF(ITYPE.EQ.1)THEN
+        IENDG=JOINT
+        IENDC=1
+      END IF
+100   CONTINUE
+C   LENGTH OF OVERLAP?
+      LG=IDIM2-IENDG+1
+      LO=MIN(IDOUT,LG)
+C   SAVE RAW DATA
+      CALL SQCOPY(SEQG2,SEQ3,IDIM2)
+      CALL MSTLKL(SEQ3,IDIM2)
+      X=FLOAT(LO)
+      Y=X
+      K=IENDG+LO-1
+C   POINT TO CONSENSUS
+      J=0
+C   CHECK FOR OVERFLOW
+      IF(K.GT.MAXGEL)THEN
+        CALL ERROMF('DALIGN: matching region too long')
+        IFAIL = 1
+        RETURN
+      END IF
+      DO 200 I=IENDG,K
+        J=J+1
+        IF(CTONUM(SEQC2(J)).EQ.CTONUM(SEQ3(I))) THEN
+          IF(CTONUM(SEQC2(J)).LT.5) GO TO 200
+C         SO FAR THEY ARE = AND ACGT, WHAT IS LEFT IS = AND 5
+          IF( ((SEQC2(J).EQ.'*').OR.(SEQC2(J).EQ.',')) .AND.
+     +        (( SEQ3(I).EQ.'*').OR.( SEQ3(I).EQ.',')) ) GO TO 200
+        END IF
+        X=X-1.
+200   CONTINUE
+      X=(Y-X)*100./Y
+      IFAIL=0
+      IF (X.GT.PERMAX) IFAIL = 1
+      IF(ITOTPC.GT.MAXPC) IFAIL = 1
+      IF(ITOTPG.GT.MAXPG) IFAIL = 1
+C
+C ISHOW 1 hide all alignments
+C       2 show passes
+C       3 show all alignments
+C       4 show failures only
+C
+C          WRITE(*,*)X,ITOTPC,ITOTPG
+      IF (ISHOW.EQ.1) THEN
+        IF(IFAIL.EQ.0) THEN
+C          WRITE(INFOD,1052)X,ITOTPC,ITOTPG
+C1052      FORMAT('Percent mismatch ',F4.1,', pads in contig',I3,
+C     +    ', pads in gel',I3)
+C CHECKED
+          CALL SWRT3(INFOD,
+     + 'Percent mismatch %4.1f, pads in contig%3d, pads in gel%3d%!',
+     +         X,ITOTPC,ITOTPG)
+          CALL INFO(INFOD)
+        END IF
+        RETURN
+      ELSE IF(ISHOW.EQ.2) THEN
+        IF (IFAIL.NE.0) RETURN
+      ELSE IF(ISHOW.EQ.4) THEN
+        IF (IFAIL.EQ.0) THEN
+C          WRITE(INFOD,1052)X,ITOTPC,ITOTPG
+C CHECKED
+          CALL SWRT3(INFOD,
+     + 'Percent mismatch %4.1f, pads in contig%3d, pads in gel%3d%!',
+     +         X,ITOTPC,ITOTPG)
+          CALL INFO(INFOD)
+          RETURN
+        END IF
+      END IF
+C      WRITE(INFOD,1052)X,ITOTPC,ITOTPG
+C CHECKED
+      CALL SWRT3(INFOD,
+     + 'Percent mismatch %4.1f, pads in contig%3d, pads in gel%3d%!',
+     +         X,ITOTPC,ITOTPG)
+C      WRITE(NAME2,1000)'     Consensus'
+C      WRITE(NAME1,1000)'       Reading'
+C1000  FORMAT(A)
+C CHECKED
+      CALL SWRT0(NAME2, '    Consensus %!')
+      CALL SWRT0(NAME1, '      Reading %!')
+      KC = FORTA(SEQC2(1),SEQG2(IENDG),LO,NAME2,NAME1,LEN(NAME1),
+     +  IENDC,IENDG,INFOD,80)
+      END
+C     DELCON
+C
+C   DELETES CONTIG FROM CONSENSUS SEQUENCE
+      SUBROUTINE DELCON(SEQ1,ILEFT,ILC,IDIM1)
+C   AUTHOR: RODGER STADEN
+      CHARACTER SEQ1(IDIM1)
+C   FIRST CHAR TO REPLACE
+      I1=ILEFT-20
+C   FIRST CHAR TO MOVE
+      I2=ILEFT+ILC
+C   IS THIS RIGHTMOST CONTIG ANYWAY?
+      IF(I2.GT.IDIM1)GO TO 10
+C   NUMBER TO MOVE
+      ID=IDIM1-I2+1
+C   MOVE
+      CALL SQCOPY(SEQ1(I2),SEQ1(I1),ID)
+C   RESET LENGTH
+      IDIM1=I1+ID-1
+      RETURN
+10    CONTINUE
+C   RIGHTMOST CONTIG SO DONT MOVE
+      IDIM1=I1-1
+C
+      RETURN
+      END
+C     LINEUP
+C
+C   TAKES 2 SEQS SET OF MATCHES AND PRODUCES LINED UP SEQS
+C   FINDS IF WE HAVE A LEFT OVERLAP
+C   RETURNS POSITION OF JOINT. THIS IS RELATIVE TO THE CONTIG
+C   FOR MOST MATCHES BUT I RELATIVE TO THE GEL FOR A LEFT OVERLAP
+      SUBROUTINE LINEUP(SEQG,SEQC,SEQG2,SEQC2,IDC,IDG,IDOUT,
+     1MATG,MATC,MATL,IP,ITOTPC,ITOTPG,JOINT,ITYPE,MAXGEL,IFAIL)
+C   AUTHOR: RODGER STADEN
+      CHARACTER SEQG(IDG),SEQC(IDC),SEQG2(IDOUT),SEQC2(IDOUT),PAD
+      INTEGER MATG(IP),MATC(IP),MATL(IP)
+      SAVE PAD
+      DATA PAD/','/
+      IFAIL=0
+C   ZERO PADDING CHARS IN CONTIG (GEL DONE AT END BY DIFFERENCE
+C   IN INPUT AND OUTPUT LENGTHS)
+      ITOTPC=0
+C   FILL OUTPUT WITH PADDING
+      DO 10 I=1,IDOUT
+        SEQG2(I)=PAD
+        SEQC2(I)=PAD
+10    CONTINUE
+      NMTCH=0
+C   SET INITIAL POINTERS TO OUTPUT
+C   CONSENSUS
+      IS1=1
+C   GEL
+      IS2=1
+C   FIND DISTANCE FROM LEFT MATCH IN GEL TO LEFT OF GEL
+      IG2=MATG(1)-1
+      IF(IG2.EQ.0)THEN
+C       THE LEFT END OF THE GEL MATCHES SO THIS IS NOT A LEFT OVERLAP
+C       SET TYPE
+        ITYPE=-1
+C       SET JOINT
+        JOINT=MATC(1)
+C       SKIP NEXT SECTION
+        GO TO 50
+      END IF
+C   FIND DISTANCE FROM LEFT MATCH IN CONTIG TO LEFT OF CONTIG
+      IC2=MATC(1)-1
+C   GET DISTANCE FROM FIRST MATCH IN CONTIG TO FIRST MATCH IN GEL.
+C   IF THIS DISTANCE <0 THEN WE HAVE A LEFT OVERLAP
+      IC1=IC2-IG2+1
+      IF(IC1.GT.0)THEN
+C       THIS IS NOT A LEFT OVERLAP
+C       SET TYPE
+        ITYPE=-1
+C       SET LEFT END
+        JOINT=IC1
+C       COPY THE GEL UPTO THE FIRST MATCH, INTO THE OUTPUT ARRAY
+C       CHECK FOR OVERFLOW
+        IF(IG2.GT.MAXGEL)GO TO 700
+        CALL SQCOPY(SEQG(1),SEQG2(1),IG2)
+C       COPY THE CONTIG FOR THE SAME REGION
+        IF(IG2.GT.MAXGEL)GO TO 700
+        CALL SQCOPY(SEQC(IC1),SEQC2(1),IG2)
+        IS1=IS1+IG2
+        IS2=IS2+IG2
+        GO TO 50
+      END IF
+C   MUST BE LEFT END OVERLAP
+C   SET TYPE
+      ITYPE=1
+C   SET POSITION OF JOINT RELATIVE TO GEL
+      JOINT=ABS(IC1)+2
+C   COPY OVER THE GEL UPTO THE JOINT
+C   CHECK FOR OVERFLOW
+      IF(IG2.GT.MAXGEL)GO TO 700
+      CALL SQCOPY(SEQG(1),SEQG2(1),IG2)
+      IS2=IS2+IG2
+C   WE MAY ALSO HAVE MISMATCHING
+C   DATA AT THE JOIN SO DEAL WITH THAT NOW
+C   IF IC2 >0 THE LEFT END OF THE CONTIG MATCHES THE GEL BUT OTHERWISE
+C   WE HAVE SOME MISMATCHED DATA TO DEAL WITH - WE NEED TO TRANSFER
+C   THE MISMATCHED REGION OF THE CONTIG TO THE OUTPUT ARRAY
+      IF(IC2.GT.0)THEN
+        IF(IC2.GT.MAXGEL)GO TO 700
+        CALL SQCOPY(SEQC(1),SEQC2(1),IC2)
+        IS1=IS1+IC2
+      END IF
+C   WHEN WE GET HERE WE HAVE SORTED OUT THE LEFT ENDS FOR LEFT OVERLAP
+C   AND MISMATCHED LEFT ENDS, WE NOW DEAL WITH THE REST OF THE SEQUENCE
+C   STARTING WITH THE FIRST BLOCK OF IDENTITY
+C
+C IG1 POSITION IN INPUT GEL
+C IS2 POSITION IN OUTPUT GEL
+C IC1 POSITION IN INPUT CONTIG
+C IS1 POSITION IN OUTPUT CONTIG
+C LG1 POSITION OF END OF CURRENT MATCH IN OUTPUT GEL
+C LC1 POSITION OF END OF CURRENT MATCH IN OUTPUT CONTIG
+C LG2 DISTANCE FROM CURRENT MATCH IN INPUT GEL TO NEXT MATCH
+C LC2 DISTANCE FROM CURRENT MATCH IN INPUT CONTIG TO NEXT MATCH
+C
+50    CONTINUE
+C   POINT TO NEXT MATCH
+      NMTCH=NMTCH+1
+C   COPY NEXT MATCH
+      IG1=MATG(NMTCH)
+      IC1=MATC(NMTCH)
+      L=MATL(NMTCH)
+C   CHECK FOR OVERFLOW
+      IF(IS2+L-1.GT.MAXGEL)GO TO 700
+      CALL SQCOPY(SEQG(IG1),SEQG2(IS2),L)
+C   CHECK FOR OVERFLOW
+      IF(IS1+L-1.GT.MAXGEL)GO TO 700
+      CALL SQCOPY(SEQC(IC1),SEQC2(IS1),L)
+C   POINT TO NEXT OUTPUT POSITIONS
+      IS1=IS1+L
+      IS2=IS2+L
+C   END OF CURRENT MATCH
+      LG1=IG1+L
+      LC1=IC1+L
+C   ANY MORE MATCHES
+      IF(NMTCH.EQ.IP)GO TO 500
+      K=NMTCH+1
+      LG2=MATG(K)-LG1
+      LC2=MATC(K)-LC1
+C   ANY DIFFERENCE IN LENGTH? IF SO WE HAVE TO PAD SO THEY BECOME THE SAME
+      L5=ABS(LG2-LC2)
+C   COUNT PADDING CHARS IN CONTIG
+      IF(LG2.GT.LC2)ITOTPC=ITOTPC+L5
+C   IF DIFFERENCE INCREMENT SHORTER
+      IF(LG2.GT.LC2)IS1=IS1+L5
+C   IF GEL NEEDS PADDING TRY TO PUT PADS NEXT TO DOUBLE CODES
+      IF(LC2.GT.LG2)CALL PADCOP(SEQG,SEQG2,
+     +LG1,MATG(K),L5,IS2,LG2,MAXGEL,IFAIL,SEQC,IDC,LC1)
+C   CHECK FOR OVERFLOW
+      IF(IFAIL.EQ.1)GO TO 700
+C   NOW COPY MISSMATCHED REGION
+C   CHECK FOR OVERFLOW
+      IF(IS2+LG2-1.GT.MAXGEL)GO TO 700
+      IF(LG2.GT.0)CALL SQCOPY(SEQG(LG1),SEQG2(IS2),LG2)
+C   CHECK FOR OVERFLOW
+      IF(IS1+LC2-1.GT.MAXGEL)GO TO 700
+      IF(LC2.GT.0)CALL SQCOPY(SEQC(LC1),SEQC2(IS1),LC2)
+C   POINT TO NEXT OUTPUT POSITIONS
+      IS1=IS1+LC2
+      IS2=IS2+LG2
+C   GET NEXT MATCH
+      GO TO 50
+500   CONTINUE
+C
+C   FINISH RIGHT ENDS
+C   ONLY COPY TO END OF GEL IN GEL AND TO THE SAME RELATIVE POSITION
+C   IN THE CONTIG FOR DISPLAY PURPOSES AND FOR COUNTING MISMATCH
+C   CURRENT ENDS AT LG1,LC1
+C   HOW FAR TO END OF GEL?
+C   SET M
+      M=0
+      L=IDG-LG1+1
+      IF(L.LT.1)GO TO 600
+C   CHECK FOR OVERFLOW
+      IF(IS2+L-1.GT.MAXGEL)GO TO 700
+      CALL SQCOPY(SEQG(LG1),SEQG2(IS2),L)
+C   NEED TO COPY TO END OF GEL IN CONTIG FOR DISPLAY
+C   POINT TO POSN IN CONTIG LEVEL WITH END OF GEL
+      M=LC1+L-1
+C   IS THIS OVER END OF CONTIG?
+      IF(M.GT.IDC)M=IDC
+C   NUMBER TO COPY
+      M=M-LC1+1
+C   CHECK FOR OVERFLOW
+      IF(IS1+M-1.GT.MAXGEL)GO TO 700
+      IF(M.GT.0)CALL SQCOPY(SEQC(LC1),SEQC2(IS1),M)
+600   CONTINUE
+C   COUNT PADDING IN GEL
+      ITOTPG=IS2+L-1-IDG
+C   SET NEW LENGTHS FOR RETURN TO CALLING ROUTINE
+      IDOUT=IS1+M-1
+      IDG=IS2+L-1
+      IFAIL=0
+      RETURN
+700   CONTINUE
+      CALL ERROMF(
+     +'Matching region too long in lineup: alignment aborted')
+      IFAIL=1
+      RETURN
+      END
+C     MERGE
+C
+C   ROUTINE SENT CONTIG WHOSE GELS MAY BE OUT OF ORDER
+C   REORDERS GELS ON POSITION OF LEFT ENDS AND SETS LEFT
+C   GEL NUMBER FOR THE REORDERED CONTIG
+C
+      SUBROUTINE MERGE(RELPG,LNGTHG,LNBR,RNBR,LINCON,IDBSIZ)
+C   AUTHOR: RODGER STADEN
+      INTEGER RELPG(IDBSIZ)
+      INTEGER LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+C
+C   START AT LEFT END
+      N=LNBR(LINCON)
+      GO TO 22
+21    CONTINUE
+C   SET POINTER TO NEXT GEL TO RIGHT IN LIST
+      N=NR
+      IF(I1.GT.0)N=I2
+22    CONTINUE
+C   SET POINTER TO NEXT GEL TO RIGHT
+      NR=RNBR(N)
+      IF(NR.EQ.0)GO TO 30
+C   HAVENT REACHED END YET
+      I1=0
+23    CONTINUE
+C   ARE THESE 2 IN CORRECT ORDER IE N<=NR ?
+      IF(RELPG(N).LE.RELPG(NR))GO TO 21
+C   NOT IN ORDER SO CHAIN LEFT UNTIL CORRECTLY POSITIONED
+C   THEN COME BACK TO THIS POINT AND CONTINUE
+C   IF FIRST MOVE SAVE POSITION
+      IF(I1.EQ.0)I2=N
+      I1=1
+C   EXCHANGE NEIGHBOURS
+      M=RNBR(NR)
+      IF(M.NE.0)LNBR(M)=N
+      M=LNBR(N)
+      IF(M.NE.0)RNBR(M)=NR
+      RNBR(N)=RNBR(NR)
+      RNBR(NR)=N
+      LNBR(NR)=LNBR(N)
+      LNBR(N)=NR
+C   CHAIN BACK THRU LIST
+      N=LNBR(NR)
+      IF(N.EQ.0)GO TO 21
+C   END NOT REACHED
+      GO TO 23
+30    CONTINUE
+C  ALL DONE POINTER AT RIGHT GEL
+      RNBR(LINCON)=N
+      RETURN
+      END
+      SUBROUTINE REMOVL(MATC,MATG,MATL,IP)
+C   AUTHOR: RODGER STADEN
+      INTEGER MATC(IP),MATG(IP),MATL(IP)
+C
+C   SET POINTER TO FIRST MATCH
+      NMTCH=0
+10    CONTINUE
+C   POINT TO NEXT MATCH
+      NMTCH=NMTCH+1
+C   SORT MATCHES ON LENGTH
+      IPP=IP-NMTCH+1
+      CALL BUBBL3(MATL(NMTCH),MATG(NMTCH),MATC(NMTCH),IPP)
+C   LOOK FOR END OF POSITIVES
+      DO 20 I=NMTCH,IP
+      J=I
+20    IF(MATL(I).LT.1)GO TO 30
+      J=J+1
+30    CONTINUE
+      IP=J-1
+C   END OF POSITIVES AT IP
+      IF(NMTCH.GE.IP)RETURN
+      K1=MATC(NMTCH)
+      K2=K1+MATL(NMTCH)-1
+      K3=MATG(NMTCH)
+      K4=K3+MATL(NMTCH)-1
+C   POINT TO FIRST MATCH TO TEST
+      K6=NMTCH+1
+      DO 200 I=K6,IP
+C   DO CONSENSUS FIRST
+C   OVERLAP?
+      IF(MATC(I).GT.K2)GO TO 100
+      K5=MATC(I)+MATL(I)-1
+      IF(K5.LT.K1)GO TO 100
+C   DOES OVERLAP
+C   WHICH END
+      IF(K5.LE.K2)GO TO 80
+C   LENGTH TO REDUCE MATCH BY IS IDELT
+      IDELT=K2-MATC(I)+1
+C   NEW LENGTH
+      MATL(I)=MATL(I)-IDELT
+C  MOVE LEFT ENDS
+      MATC(I)=MATC(I)+IDELT
+      MATG(I)=MATG(I)+IDELT
+      GO TO 100
+80    CONTINUE
+C   LENGTH
+      MATL(I)=K1-MATC(I)
+100   CONTINUE
+C   NOW LOOK FOR OVERLAPS WITH GEL
+C   OVERLAP?
+      IF(MATG(I).GT.K4)GO TO 200
+      K5=MATG(I)+MATL(I)-1
+      IF(K5.LT.K3)GO TO 200
+C   DOES OVERLAP
+C   WHICH END?
+      IF(K5.LE.K4)GO TO 180
+C   LENGTH TO REDUCE MATCH BY IS IDELT
+      IDELT=K4-MATG(I)+1
+C   NEW LENGTH
+      MATL(I)=MATL(I)-IDELT
+C   MOVE LEFT ENDS
+      MATC(I)=MATC(I)+IDELT
+      MATG(I)=MATG(I)+IDELT
+      GO TO 200
+180   CONTINUE
+C   LENGTH
+      MATL(I)=K3-MATG(I)
+200   CONTINUE
+      GO TO 10
+      END
+      SUBROUTINE TPCHEK(PC,PG,L,N)
+      INTEGER PC(N),PG(N),L(N)
+C     AUTHOR RODGER STADEN
+C     IF OVERLAPPING BLOCKS ARE FOUND REMOVE THE SHORTER ONE
+C     THEN REMOVE LARGE GAPS AT ENDS (THOSE AS LARGE AS THE END BLOCK)
+      K1 = 2
+1     CONTINUE
+      DO 10 I = K1,N
+        J1 = I
+        IF(PC(I).LE.PC(I-1)) GO TO 20
+        IF(PG(I).LE.PG(I-1)) GO TO 20
+10    CONTINUE
+C     REMOVE LARGE GAPS FROM ENDS
+C     THIS RULE OF THUMB COULD BE CHANGED TO USE A DIFFERENCE
+C     BETWEEN THE NUMBERS OF MISMATCHING CHARACTERS
+      IF(N.GT.1) THEN
+        K1 = PC(2) - PC(1) - L(1) 
+        J1 = PG(2) - PG(1) - L(1)
+        IF(MAX(K1,J1).GT.L(1)) THEN
+          CALL ML(PC,PG,L,N,1)
+          N = N - 1
+        END IF
+        IF(N.GT.1) THEN
+          K1 = PC(N) - PC(N-1) - L(N-1)
+          J1 = PG(N) - PG(N-1) - L(N-1)
+          IF(MAX(K1,J1).GT.L(N)) THEN
+            CALL ML(PC,PG,L,N,N)
+            N = N - 1
+          END IF
+        END IF
+      END IF
+      RETURN
+20    CONTINUE
+      IF(L(J1-1).GT.L(J1)) THEN
+        CALL ML(PC,PG,L,N,J1)
+      ELSE
+        CALL ML(PC,PG,L,N,J1-1)
+      END IF
+C  Until 25-11-90 next line was k1=j1 but this does not deal with all 
+C  cases: when a line is deleted we must compare it with the previous
+C  one before dealing with the rest, because it could be left of that
+C   one as well!
+      K1 = MAX(2,J1-1)
+      N = N - 1
+      GO TO 1
+      END
+      SUBROUTINE UPDCON(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,NGELS,NCONTS,
+     +SEQ,MAXSEQ,IDIM1,CSTART,CLENO,LINCON,NAMPRO,SEQ2,
+     +IDEVR,IFAIL,MAXGEL,IDM,PERCD,MASK,CLIST)
+      INTEGER RELPG(IDBSIZ),LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      INTEGER CSTART,CLENO,S1,B1,RREG
+      CHARACTER SEQ(MAXSEQ),SEQ2(MAXGEL)
+      CHARACTER NAMPRO*(*)
+      INTEGER ILADD(1),IRADD(1)
+      INTEGER CLIST(1)
+      INTEGER CHNRP
+      EXTERNAL CHNRP
+C cstart consensus start point (before new reading)
+C cleno consensus length (before new reading)
+C lincon element number of contig
+C s1 number of first reading to shift
+C b1 number of first base to shift (in overall consensus positioning)
+C
+C there are 2 tasks: 1. make space for the new and altered region
+C                    2. calculate the new consensus and put it in the space
+C we do not have to make space if:
+C a. we are dealing with the last contig in the consensus and there are no
+C    readings starting to the right of the new data
+C b. the contig has not been padded
+C
+C New code to update the consensus only for the region affected by the
+C new reading. Find the next reading to the right of the new one, which
+C the new one does not overlap (might not be one!). Make a consensus from
+C start of new reading to here. Prior to this make space for it by moving
+C the consensus right (only if the contig is longer (padding or extra data
+C at its ends). Let s1 be the first reading to shift. We shift from its
+C left end to the end of the contig - where is this in the overall consensus?
+C The distance of the left end of s1 to the right end of the contig is
+C unchanged. This means that the new relpg(s1) is the same distance from
+C the right end of the old consensus as the old relpg(s1) was from the right
+C end of the old consensus. So from this we can calculate the position of the
+C the first base to move. 
+C Let L be the position in the overall consensus of  the last base in this contig
+C            L = cstart - cleno - 1
+C Let D = distance to end of contig 
+C            D = RELPG(LINCON) - relpg(s1) + 1.
+C First base to shift B1 = L - D + 1
+C Last base to shift is idim1
+C Distance to move to right is relpg(lincon) - cleno ie the number of extra bases
+C make consensus from relpg(ngels) to relpg(s1) - 1
+C put it at cstart + relpg(ngels) - 1
+C
+C Potential problems:
+C 1) reading at right end of contig
+C the search for the first nonoverlapping read to the right will return 0
+C shift al the next contig: ie cstart + cleno onwards
+C make consensus from relpg(ngels) to end of contig
+C put it at cstart + relpg(ngels) -1
+C
+C 2) reading at left end of contig
+C shift whole contig ie cstart - 20
+C add new title
+C shift consensus relpg(lincon) - cleno to the right
+C
+C 3) new reading contains contig - cases 1 and 2 combined
+C the search for the first nonoverlapping read to the right will return 0
+C shift whole of next contig and make consensus from relpg(ngels) to end of
+C contig.
+C
+C 4) Might not be a next contig to shift
+C
+C get number of first reading to shift
+C
+      S1 = CHNRP(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,NGELS,NCONTS,
+     +RELPG(NGELS)+ABS(LNGTHG(NGELS))-1)
+C      WRITE(*,*)'S1',S1
+C
+C is the altered region longer than the original: only then do we need to shift
+C
+C           WRITE(*,*)'IDIM1',IDIM1
+C           WRITE(*,*)'RELPG(LINCON)',RELPG(LINCON)
+C           WRITE(*,*)'CSTART,CLENO',CSTART,CLENO
+      IF (RELPG(LINCON) - CLENO.GT.0) THEN
+C
+C it is longer so we probably need to shift
+C
+        IF (S1.EQ.0) THEN
+C
+C no readings start to the right of the new data
+C
+          IF (CSTART+CLENO-1.LT.IDIM1) THEN
+C
+C there are other contigs to the right
+C
+C           WRITE(*,*)'CSTART,CLENO',CSTART,CLENO
+            B1 = CSTART + CLENO
+C            WRITE(*,*)'B1',B1
+            CALL MAKHCA(SEQ,MAXSEQ,B1,RELPG(LINCON)-CLENO,IDIM1,IFAIL)
+            IF(IFAIL.NE.0) THEN
+              CALL ERROMF('Error: consensus too long')
+              RETURN
+            END IF
+          ELSE
+C
+C there are no contigs to the right and no readings start to the right of
+C the new one so nothing to shift
+C
+          END IF
+        ELSE
+C
+C there are readings starting to the right of the new one
+C
+C shift from start of next reading to right
+C
+           L = CSTART + CLENO - 1
+C           WRITE(*,*)'CSTART,CLENO,L',CSTART,CLENO,L
+           LD = RELPG(LINCON) - RELPG(S1) + 1
+C           WRITE(*,*)'LD',LD
+           B1 = L - LD + 1
+C            WRITE(*,*)'B1',B1
+           CALL MAKHCA(SEQ,MAXSEQ,B1,RELPG(LINCON)-CLENO,IDIM1,IFAIL)
+           IF(IFAIL.NE.0) THEN
+             CALL ERROMF('Error: consensus too long')
+             RETURN
+           END IF
+        END IF
+      END IF
+C
+C now make new consensus (where do we put it,  do we need
+C to give it a header, and what region do we make it for ?
+C in the simplest case make it for relpg(ngels) to relpg(s1) -1
+C if s1=0 make it for relpg(ngels) to end of contig (relpg(lincon))
+C we give it a header if it is at the left end of the contig ie lnbr(ngels)=0
+C
+C we always start at the left end of the new reading
+C
+      LREG = RELPG(NGELS)
+C
+C we end at the next reading to the right or the end of the contig
+C
+      IF (S1.NE.0) THEN
+        RREG = RELPG(S1) - 1
+      ELSE
+        RREG = RELPG(LINCON)
+      END IF
+C
+C where do we put the new consensus ?
+C
+      B1 = CSTART + RELPG(NGELS) - 1
+C      WRITE(*,*)'LREG,RREG',LREG,RREG
+C            WRITE(*,*)'B1',B1
+C
+C do we need to add a title
+C
+      IF (LNBR(NGELS).EQ.0) THEN
+        B1 = CSTART - 20
+C        WRITE(*,*)'ADD NEW TIT AT',B1
+        CALL ADDTIT(SEQ(B1),NAMPRO,NGELS,B1)
+      END IF
+      IGELC = LNBR(LINCON)
+C
+C note aconsn will chain along until it find the first useful reading!!
+C
+C      JOB = 2
+C
+C set dummy values for precon (and iladd,iradd above)
+C
+      NBAD = 0
+      IWING = 0
+C
+C set task (normal consensus)
+C
+      ITASK = 4
+C
+C add masking if required
+C
+      IF (MASK.EQ.3) ITASK = ITASK + 32
+      IF (MASK.EQ.4) ITASK = 8
+C      WRITE(*,*)'BEFORE'
+C      WRITE(*,*)(SEQ(JJJ),JJJ=1,IDIM1+RELPG(LINCON)-CLENO)
+C         CALL FMTDB1(SEQ,IDIM1,1,IDIM1,60,6)
+C      WRITE(*,*)'NOCONT,LREG,RREG,ITASK,B1'
+C      WRITE(*,*)NOCONT,LREG,RREG,ITASK,B1
+      CALL PRECN1(SEQ,NAMPRO,PERCD,IDBSIZ,LINCON,LREG,RREG,
+     +     ITASK,IDEVR,B1,MAXGEL,MAXSEQ,IWING,NBAD,
+     +     ILADD,IRADD,IFAIL)
+      IF(IFAIL.NE.0) THEN
+        CALL ERROMF('Error calculating consensus')
+        RETURN
+      END IF
+C
+C before we leave we must make the overall consensus length correct
+C  so add on the extra length (if any) which is the new length - old length
+C
+C      WRITE(*,*)'OLD IDIM1',IDIM1
+      IDIM1 = IDIM1 + RELPG(LINCON) - CLENO
+C      WRITE(*,*)'after NEW IDIM1/2',IDIM1
+C      WRITE(*,*)(SEQ(JJJ),JJJ=1,IDIM1)
+C         CALL FMTDB1(SEQ,IDIM1,1,IDIM1,60,6)
+      END
+      SUBROUTINE MAKHCA(STRING,MAXAR,FROM,HSIZE,ASIZE,IFAIL)
+      CHARACTER STRING(MAXAR)
+      INTEGER FROM,HSIZE,ASIZE
+C
+C make a hole of size hsize in character array size asize
+C
+      J = ASIZE + HSIZE
+      IF (J.GT.MAXAR) THEN
+        IFAIL = 1
+        RETURN
+      END IF
+      DO 10 I=ASIZE,FROM,-1
+        STRING(J) = STRING(I)
+        J = J - 1
+ 10     CONTINUE
+      IFAIL = 0
+      END
+      INTEGER FUNCTION CHNRP(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,LGEL,NCONT,
+     +LREG)
+      INTEGER RELPG(IDBSIZ),LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+C
+C find first reading starting past lreg (0=none found)
+C
+      I = LGEL
+      CHNRP = 0
+10    CONTINUE
+      IF(I.NE.0) THEN
+        IF(RELPG(I).LE.LREG) THEN
+          I = RNBR(I)
+          GO TO 10
+        END IF
+        CHNRP = I
+        RETURN
+      END IF
+      END
+      INTEGER FUNCTION CHNRP1(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,
+     +LGEL,LREG)
+      INTEGER RELPG(IDBSIZ),LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+C
+C find first reading with data covering or past lreg (0=none found)
+C
+      I = LGEL
+      CHNRP1 = 0
+10    CONTINUE
+      IF(I.NE.0) THEN
+        IF(RELPG(I)+ABS(LNGTHG(I))-1.LT.LREG) THEN
+          I = RNBR(I)
+          GO TO 10
+        END IF
+        CHNRP1 = I
+        RETURN
+      END IF
+      END
+      SUBROUTINE AERROR(LIST,NAME,IERR)
+      CHARACTER LIST*(*),NAME*(*)
+      CHARACTER INFOD*60
+      CHARACTER ERRMSG*333
+C
+C handle errors for assembly
+C
+C errors are:
+C 0 file not found or file is of invalid format
+C 1 read too short
+C 2 failed to align and not entered
+C 3 failed on entry
+C 4 failed to align but entered
+C 5 no match found during masked assembly
+      L=1
+      DO 5 J=1,LEN(NAME)
+         L=J
+         IF (NAME(J:J).EQ.' ') THEN
+            GO TO 6
+         END IF
+ 5    CONTINUE
+ 6    CONTINUE
+C      WRITE(INFOD,1000)NAME(1:L),IERR
+C 1000 FORMAT(A,I2)
+C CHECKED
+      CALL SWRT3B(INFOD,'%.*s%2d%!',LEN(NAME(1:L)),NAME(1:L),IERR)
+C      WRITE(ERRMSG,1010)'Failed file ',NAME(1:L),
+C     +     'written to error file'
+C 1010 FORMAT(A,A,A)
+C CHECKED
+      CALL SWRT2B(ERRMSG,'Failed file %.*swritten to error file%!',
+     +     LEN(NAME(1:L)),NAME(1:L))
+      CALL ERROMF(ERRMSG)
+      CALL TOLIST(LIST,INFOD)
+      CALL INFO(ERRMSG)
+      END
+      SUBROUTINE SINDB(IDEVN,NGELS,RNAMES,NAME,JOB)
+      CHARACTER*(*) RNAMES(NGELS),NAME*(*)
+      IF (JOB.EQ.1) THEN
+        DO 10 J=1,NGELS
+          CALL READN(IDEVN,J,RNAMES(J))
+C          WRITE(*,*)'INITIALISING RNAMES ',RNAMES(J)
+10      CONTINUE
+        RETURN
+      ELSE IF (JOB.EQ.2) THEN
+        RNAMES(NGELS) = NAME
+C          WRITE(*,*)' ADDING TO RNAMES ',RNAMES(NGELS)
+      END IF
+      END
+      INTEGER FUNCTION INDB(NGELS,RNAMES,NAME)
+      CHARACTER RNAMES(NGELS)*40,NAME*(*)
+      DO 10 J=1,NGELS
+C        WRITE(*,*)'CHECKING RNAMES ',NAME,' ',RNAMES(J)
+        IF(NAME.EQ.RNAMES(J)) THEN
+          INDB = J
+          RETURN
+        END IF
+10    CONTINUE
+      INDB = 0
+      END
+      SUBROUTINE SLIDES(SEQ1,IDC,SEQ2,IDIM2,MS1,MS2,MAXPG,MAXPC,MINSLI,
+     +MATL,MATC,MATG,IP)
+C   AUTHOR: RODGER STADEN
+      CHARACTER SEQ1(IDC),SEQ2(IDIM2)
+      INTEGER MATL(IP),MATC(IP),MATG(IP),P1S,P1,P2
+      INTEGER CTONUM
+      EXTERNAL CTONUM
+      IP1 = IP
+      IP = 0
+C   LEFT END S2 RELATIVE S1 - MAX PADS -2 READY FOR LOOP
+      P1S = MS1 - MS2 - MAXPC - 1
+C   TRY NSLIDE START POSNS FOR SEQ2
+C      WRITE(*,*)'IDC,IDIM2',IDC,IDIM2
+C      WRITE(*,*)'SEQ1'
+C      WRITE(*,*)(SEQ1(JJJ),JJJ=1,IDC)
+C      WRITE(*,*)'SEQ2'
+C      WRITE(*,*)(SEQ2(JJJ),JJJ=1,IDIM2)
+      DO 100 I=1,MAXPG+MAXPC+1
+C       POINT TO SEQ1 START
+        P1S = P1S + 1
+C       POINT TO CURRENT SEQ1 POSN
+        P1 = P1S
+        N = 0
+C       COMPARE WHOLE LENGTH OF SEQ2 (IF P1 WITHIN RANGE)
+        DO 50 J=1,IDIM2
+          P2 = J
+          P1 = P1 + 1
+          IF(P1.LT.1)GO TO 50
+C         OFF RIGHT END? IF SO MAY HAVE BEEN A MATCH
+          IF(P1.GT.IDC)GO TO 40
+          IF(CTONUM(SEQ1(P1)).EQ.CTONUM(SEQ2(P2)))GO TO 45
+40        CONTINUE
+          IF(N.GE.MINSLI)CALL SAVIT(N,P1,P2,IP,MATL,MATC,MATG,IP1)
+          N = 0
+          GO TO 50
+45        CONTINUE
+          N = N + 1
+50      CONTINUE
+C       GOOD SCORE AT END? NEED TO INCREMENT POINTERS FOR SAVIT
+        P1 = P1 + 1
+        P2 = P2 + 1
+        IF(N.GE.MINSLI)CALL SAVIT(N,P1,P2,IP,MATL,MATC,MATG,IP1)
+100   CONTINUE
+      END
+      SUBROUTINE PADCON(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +GEL,LINCON,POSN,NC,IDBSIZ,IDEVR,MAXGEL)
+C   AUTHOR: RODGER STADEN
+      INTEGER RELPG(IDBSIZ),POSN,X
+      INTEGER LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      CHARACTER GEL(MAXGEL)
+      CHARACTER PAD
+      SAVE PAD
+      DATA PAD/'*'/
+C   NOW FIND FIRST CHAR THAT OVERLAPS REGION
+      LLINO=LNBR(LINCON)
+30    CONTINUE
+      X=RELPG(LLINO)+ABS(LNGTHG(LLINO))-1
+      IF(X.GE.POSN)GO TO 40
+C   NOT IN REGION
+      LLINO=RNBR(LLINO)
+      GO TO 30
+40    CONTINUE
+C   NOW GET THIS GEL FROM DISK
+      CALL READW(IDEVR,LLINO,GEL,MAXGEL)
+C   CALC POSN IN THIS GEL TO EDIT
+      X=POSN-RELPG(LLINO)+1
+      K=X
+      LNGTHG(LLINO)=LNGTHG(LLINO)+SIGN(NC,LNGTHG(LLINO))
+      IF ( ABS(LNGTHG(LLINO)).GT.MAXGEL ) 
+     +   LNGTHG(LLINO) = SIGN(MAXGEL,LNGTHG(LLINO))
+C   INSBAS TAKES CARE OF OVERFLOW OF READ IN ITS OWN WAY
+      DO 61 I=1,NC
+C        WRITE(*,*)'INSERT TO ',LLINO,' AT ',K
+        CALL INSBAS(IDEVR,LLINO,K,PAD)
+ 61   CONTINUE
+C   WRITE NEW LINE
+      CALL WRITEG(IDEVR,LLINO,RELPG(LLINO),LNGTHG(LLINO),
+     +LNBR(LLINO),RNBR(LLINO))
+65    CONTINUE
+C   NOW GET NEXT GEL
+      LLINO=RNBR(LLINO)
+C   LAST GEL?
+      IF(LLINO.EQ.0)GO TO 70
+C   DOES IT HAVE DATA IN REGION?
+C   IE DO RELPG  AND RELPG+LNGTHG-1 LIE EITHER SIDE OF POSN?
+      IF(RELPG(LLINO).GE.POSN)GO TO 70
+C      WRITE(*,*)LLINO,RELPG(LLINO),POSN
+      X=RELPG(LLINO)+ABS(LNGTHG(LLINO))-1
+      IF(X.LT.POSN)GO TO 65
+C  WITHIN
+      GO TO 40
+70    CONTINUE
+C      WRITE(*,*)'NOW MOVING'
+C   INSERTS FINISHED SO NEED TO INCREMENT ALL THOSE GELS TO RIGHT
+      LLINO=LNBR(LINCON)
+75    CONTINUE
+      IF(RELPG(LLINO).GE.POSN)GO TO 80
+76    CONTINUE
+C      WRITE(*,*)'SKIPPING ',LLINO
+      LLINO=RNBR(LLINO)
+      IF(LLINO.EQ.0)GO TO 90
+      GO TO 75
+80    CONTINUE
+C      WRITE(*,*)'ADDING TO ',LLINO
+      RELPG(LLINO)=RELPG(LLINO)+NC
+C   WRITE NEW LINE
+      CALL WRITEG(IDEVR,LLINO,RELPG(LLINO),LNGTHG(LLINO),
+     +LNBR(LLINO),RNBR(LLINO))
+      GO TO 76
+90    CONTINUE
+C   NEED TO INCREMENT CONTIG LINE
+      RELPG(LINCON)=RELPG(LINCON)+NC
+      CALL WRITEC(IDEVR,IDBSIZ-LINCON,RELPG(LINCON),
+     +LNBR(LINCON),RNBR(LINCON))
+C   Now move tags along on the consensus
+      CALL SHIFTT(IDEVR, IDBSIZ-LINCON, POSN, NC)
+      END
+      SUBROUTINE UPCHEK(PC,PG,L,N)
+      INTEGER PC(N),PG(N),L(N),DC,DG
+C     AUTHOR RODGER STADEN
+C
+C only allow gaps that are shorter than the next block of identity
+C
+      K1 = 2
+1     CONTINUE
+      DO 10 I = K1,N
+        J1 = I
+        DC = PC(I) - PC(I-1) - L(I-1)
+        DG = PG(I) - PG(I-1) - L(I-1)
+        IF(ABS(DC-DG).GE.L(I)) GO TO 20
+10    CONTINUE
+      RETURN
+20    CONTINUE
+C      WRITE(*,*)'REMOVING!!'
+        CALL ML(PC,PG,L,N,J1)
+C      IF(L(J1-1).GT.L(J1)) THEN
+C        CALL ML(PC,PG,L,N,J1)
+C      ELSE
+C        CALL ML(PC,PG,L,N,J1-1)
+C      END IF
+      K1 = MAX(2,J1-1)
+      N = N - 1
+      GO TO 1
+      END
+      SUBROUTINE PADCOP(SEQG,SEQG2,LG1,MG,L5,IS2,LG2,MAXGEL,IFAIL,
+     +SEQC,IDC,IC1)
+C   AUTHOR: RODGER STADEN
+      PARAMETER (NDUBL = 4)
+      CHARACTER SEQG(MAXGEL),SEQG2(MAXGEL),DUBBL(NDUBL),SEQC(IDC)
+      SAVE DUBBL
+      DATA DUBBL/'D','B','V','H'/
+      JC1 = IC1
+C Make seqg2 from seqg placing L5 padding chars before position MG
+C which is the start of the next block of identity. Try to put the
+C padding either in line with consensus pads, or next to double
+C codes. The positions in seqg are LG1 to MG-1. seqg2 needs to be long
+C enough to be extended from IS2 to IS2 + L5 -1 + MGM1-LG1 +1
+C ie we add L5 pads, plus the chars between and including  LG1 and MGM1
+      IDONE=0
+C   POINT TO END OF MISMATCH
+      MGM1=MG-1
+C   MAY BE NO CHARS TO COPY
+      IF(MGM1.LT.LG1)GO TO 111
+C  Next check added 26-2-91
+      MAXREQ = IS2 + L5 - 1 + MGM1 - LG1 + 1
+      IF((MGM1.GT.MAXGEL).OR.(MAXREQ.GT.MAXGEL)) THEN
+      CALL INFO(
+     +'Matching region too large in padcop: alignment aborted')
+        IFAIL=1
+        RETURN
+      END IF
+      DO 110 J=LG1,MGM1
+        IF(IDONE.LT.L5) THEN
+          IF((JC1.GT.0).AND.(JC1.LT.IDC)) THEN
+          IF(SEQC(JC1).EQ.'*') THEN
+            IS2 = IS2 + 1
+            JC1 = JC1 + 1
+            IDONE = IDONE + 1
+            GO TO 109
+          END IF
+          END IF
+          DO 108 M=1,NDUBL
+            IF(SEQG(J).EQ.DUBBL(M)) THEN
+              IS2 = IS2 + 1
+              JC1 = JC1 + 1
+              IDONE = IDONE + 1
+              GO TO 109
+            END IF
+108       CONTINUE
+109       CONTINUE
+        END IF
+        SEQG2(IS2) = SEQG(J)
+        IS2 = IS2 + 1
+        JC1 = JC1 + 1
+110   CONTINUE
+111   CONTINUE
+C   ALL CHARS COPIED. ENOUGH PADDING?
+      IF(IDONE.LT.L5)IS2=IS2+L5-IDONE
+C   IS2 SHOULD NOW BE POINTING AT NEXT CHAR
+C   ZERO LG2 TO SHOW CALLING ROUTINE COPYING DONE
+      LG2=0
+      IFAIL=0
+      END
+      SUBROUTINE ML(PC,PG,L,N,J)
+      INTEGER PC(N),PG(N),L(N)
+      DO 10 I = J,N-1
+        PC(I) = PC(I+1)
+        PG(I) = PG(I+1)
+        L(I) = L(I+1)
+10    CONTINUE
+      END
+      SUBROUTINE MSTLKL(SEQ,IDIM)
+C   AUTHOR: RODGER STADEN
+      CHARACTER SEQ(IDIM)
+      CHARACTER CHARSU
+      EXTERNAL CHARSU,INDEXS
+      DO 100 I=1,IDIM
+        J = INDEXS(SEQ(I),K)
+        SEQ(I) = CHARSU(J)
+100   CONTINUE
+      END
+      INTEGER FUNCTION INDEXS(C,S)
+      PARAMETER (IDM = 29)
+      CHARACTER C
+      INTEGER POINTS(0:255),SCORES(IDM),IND(IDM),S
+      COMMON /SHOTC/POINTS
+      SAVE /SHOTC/
+      SAVE SCORES,IND
+      DATA 
+     +IND/1,2,3,4,1,2,3,4,1,2,3,4,1,2,3,4,6,6,6,6,6,6,1,2,3,4,5,5,6/
+C      DATA DUP/'CTAG1234DVBHKLMNRY5678ctag*,-'/
+C  changed 28-7-91 to give 10 to old zeroes and 100 to lowercase
+      DATA SCORES/
+     +100,100,100,100,
+     +75,75,75,75,
+     +100,100,100,100,
+     +100,100,100,100,
+     +10,10,10,10,10,10,
+     +100,100,100,100,100,100,10/
+      I = ICHAR(C)
+      I = POINTS(I)
+      S = SCORES(I)
+      INDEXS = IND(I)
+      END
+      CHARACTER*1 FUNCTION CHARSU(I)
+      CHARACTER C*6
+      SAVE C
+      DATA C/'CTAG*-'/
+      CHARSU = C(I:I)
+      END
+C     SAVIT
+C
+      SUBROUTINE SAVIT(N,J,K,IP,S1,S2,S3,IP1)
+C   AUTHOR: RODGER STADEN
+      INTEGER S1(IP1),S2(IP1),S3(IP1)
+C
+      IP=IP+1
+C   TEST FOR OVERFLOW
+      IF(IP.GT.IP1)RETURN
+      S1(IP)=N
+      S2(IP)=J-N
+      S3(IP)=K-N
+C
+      RETURN
+      END
+      INTEGER FUNCTION CLEN(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +IDBSIZ,IIN)
+C  AUTHOR: RODGER STADEN
+C  RETURNS CONTIG LEFT GEL NUMBER OR ZERO FOR ERROR
+      INTEGER RELPG(IDBSIZ)
+      INTEGER LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      I = IIN
+      CLEN= 0
+      LEN = 0
+10    CONTINUE
+      IF(I.NE.0)THEN
+        LEN = MAX(LEN,(RELPG(I) + ABS(LNGTHG(I)) - 1))
+        I = RNBR(I)
+        IF(I.EQ.IIN)RETURN
+        GO TO 10
+      END IF
+      CLEN = LEN
+      END
+      SUBROUTINE GLLINO(RELPG,LNGTHG,LNBR,RNBR,IDBSIZ,NCONTS,LLINO,
+     +LINCON)
+      INTEGER RELPG(IDBSIZ),LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+C
+C routine to get the left gel number and contig line of the longest contig
+C
+      LLINO = 0
+      LINCON = 0
+      N=IDBSIZ-NCONTS
+      MXT = 0
+      DO 4 I=N,IDBSIZ-1
+        IF(RELPG(I).GT.MXT) THEN
+          MXT = RELPG(I)
+          LLINO = LNBR(I)
+          LINCON = I
+        END IF
+4     CONTINUE
+      END
+      INTEGER FUNCTION CLINNO(LNBR,IDBSIZ,NCONTS,IIN)
+C  AUTHOR: RODGER STADEN
+C  RETURNS CONTIG LINE NUMBER OR ZERO FOR ERROR
+      INTEGER LNBR(IDBSIZ)
+      CLINNO = 0
+      N=IDBSIZ-NCONTS
+      DO 10 J=N,IDBSIZ-1
+        IF(LNBR(J).EQ.IIN) THEN
+          CLINNO = J
+          RETURN
+        END IF
+10    CONTINUE
+      END
+      SUBROUTINE SHFTLA(STRING,MAXAR,FROMS,TO,FROME)
+      CHARACTER STRING(MAXAR)
+      INTEGER FROMS,TO,FROME
+C
+C shift an array left from froms to to
+C
+      J = TO
+      DO 10 I=FROMS,FROME
+        STRING(J) = STRING(I)
+        J = J + 1
+ 10   CONTINUE
+      END
+      INTEGER FUNCTION RANDC(
+     +RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,IDBSIZ,IIN,LINCON,LLINO)
+      INTEGER RELPG(IDBSIZ),LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      INTEGER CHAINL,GCLIN
+      EXTERNAL CHAINL,GCLIN
+C
+C return reading and contig number for contig containing IIN
+C -1 = ERROR, 0 = OK
+C
+      I = CHAINL(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,IDBSIZ,IIN)
+      IF (I.EQ.0) THEN
+        RANDC = -1
+        RETURN
+      END IF
+      LLINO = I
+      I = GCLIN(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,IDBSIZ,LLINO)
+      IF (I.EQ.0) THEN
+        RANDC = -2
+        RETURN
+      END IF
+      LINCON = I
+      RANDC = 0
+      END
+      SUBROUTINE INITS
+C  AUTHOR RODGER STADEN
+      INTEGER POINTS(0:255)
+      PARAMETER (IDM = 29)
+      CHARACTER DUP*29
+      COMMON /SHOTC/POINTS
+      SAVE /SHOTC/
+      DATA DUP/'CTAG1234DVBHKLMNRY5678ctag*,-'/
+C  ICHAR RETURNS THE COLLATING SEQUENCE NUMBER
+C  I WANT 1-4 FOR ACGT
+C                 acgt
+C                 1234
+C                 BDHV
+C                 KLMN
+C      5 FOR      *
+C      6 FOR      5678- AND ELSE
+C  THE ACTUAL VALUE RETURNED BY ICHAR IS NOT PORTABLE 
+C  SO I NEED TO INITIALIZE POINTR SO THAT THE CORRECT 
+C  ELEMENTS CONTAIN VALUES 1 - 6
+C
+        DO 30 I = 0,255
+          POINTS(I) = IDM
+30      CONTINUE
+        DO 35 I = 1,IDM
+          J = ICHAR(DUP(I:I))
+          POINTS(J) = I
+35      CONTINUE
+      END
+      INTEGER FUNCTION CHAINL(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +IDBSIZ,IIN)
+C  AUTHOR: RODGER STADEN
+C  RETURNS CONTIG LEFT GEL NUMBER OR ZERO FOR ERROR
+      INTEGER RELPG(IDBSIZ)
+      INTEGER LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      I = IIN
+      J = I
+      CHAINL = 0
+10    CONTINUE
+      IF(I.NE.0)THEN
+        J = I
+        I = LNBR(I)
+        IF(I.EQ.IIN)RETURN
+        GO TO 10
+      END IF
+      CHAINL = J
+      END
+      SUBROUTINE SHIFTC(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,IDEVR,
+     +IDBSIZ,IGN,NCONT,DIST)
+C  AUTHOR: RODGER STADEN
+C  SHIFTS PART OF A CONTIG FORM GEL IGN TO RIGHT END
+C  CONTIG LINE NUMBER IF NCONT
+      INTEGER RELPG(IDBSIZ)
+      INTEGER LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      INTEGER DIST,CLEN
+      EXTERNAL CLEN
+      I = IGN
+10    CONTINUE
+      IF(I.NE.0)THEN
+        RELPG(I) = RELPG(I) + DIST
+        CALL WRITEG(IDEVR,I,RELPG(I),LNGTHG(I),LNBR(I),RNBR(I))
+        I = RNBR(I)
+        GO TO 10
+      END IF
+C  UPDATE CONTIG LENGTH
+      L = CLEN(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +IDBSIZ,IGN)
+      RELPG(NCONT) = L
+      CALL WRITEC(IDEVR,IDBSIZ-NCONT,RELPG(NCONT),
+     +LNBR(NCONT),RNBR(NCONT))
+      END
+      SUBROUTINE FNDCON(SEQ,IDIM,CENDS,NENDS,IDCEND,MAXCON)
+C   AUTHOR: RODGER STADEN
+C   STORES THEIR POSITIONS IN CENDS AND THEIR LEFT LINE NUMBERS IN NENDS
+      PARAMETER (MAXDG = 8)
+      CHARACTER SEQ(IDIM),DC(MAXDG)
+      INTEGER CENDS(MAXCON)
+      INTEGER NENDS(MAXCON)
+      EXTERNAL JFROMC,INDEXA
+      IDCEND=0
+      DO 10 I=1,IDIM
+        IF(SEQ(I).NE.'<')GO TO 10
+        IDCEND=IDCEND+1
+C       PUT POSITION OF LEFT END OF CONTIG IN CENDS
+        CENDS(IDCEND)=I
+        K = INDEXA(SEQ(I),20,'.')
+        IF(K.EQ.0) GO TO 20
+        K = K + I
+C        IF (.NOT.((SEQ(K+MAXDG).EQ.'-').OR.(SEQ(K+MAXDG).EQ.'>')))
+C     +     GOTO20
+        DO 5 J=1,MAXDG
+          IF ((SEQ(K).EQ.'-').OR.(SEQ(K).EQ.'>')) THEN
+             GO TO 6
+          END IF
+          DC(J)=SEQ(K)
+          K=K+1
+5       CONTINUE
+6       CONTINUE
+        NENDS(IDCEND)=JFROMC(DC,J-1)
+10    CONTINUE
+C     STORE POSITION OF LAST CHAR +1 TO SIMPLIFY DISPLAY ROUTINES
+      CENDS(IDCEND+1)=IDIM+1
+      RETURN
+ 20   CONTINUE
+      CALL ERROMF('Error in FNDCON: illegal consensus header')
+      IDCEND = 0
+      END
+      INTEGER FUNCTION GCLIN(RELPG,LNGTHG,LNBR,RNBR,NGELS,NCONTS,
+     +IDBSIZ,IIN)
+C  AUTHOR: RODGER STADEN
+C  RETURNS CONTIG LINE NUMBER OR ZERO FOR ERROR
+      INTEGER RELPG(IDBSIZ)
+      INTEGER LNGTHG(IDBSIZ),LNBR(IDBSIZ),RNBR(IDBSIZ)
+      GCLIN = 0
+      N=IDBSIZ-NCONTS
+      DO 10 J=N,IDBSIZ-1
+        IF(LNBR(J).EQ.IIN) THEN
+          GCLIN = J
+          RETURN
+        END IF
+10    CONTINUE
+      END
+C     SQCOM
+      SUBROUTINE SQCOMM(SEQ,IDIM)
+C   AUTHOR: RODGER STADEN
+      PARAMETER (MAXLST = 12)
+      CHARACTER SEQ(IDIM),LIST1(MAXLST),LIST2(MAXLST),TEMP
+      SAVE LIST1,LIST2
+      DATA LIST1/
+     +'C','T','A','G',
+     +'c','t','a','g',
+     +'e','d','f','i'/
+      DATA LIST2/
+     +'G','A','T','C',
+     +'g','a','t','c',
+     +'i','f','d','e'/
+      DO 100 I=1,IDIM
+        TEMP = SEQ(I)
+        DO 50 J=1,MAXLST
+          IF(TEMP.EQ.LIST1(J))THEN
+            SEQ(I)=LIST2(J)
+            GO TO 99
+          END IF
+50      CONTINUE
+99      CONTINUE
+100   CONTINUE
+      END
+      SUBROUTINE ERROMF(STRING)
+      CHARACTER STRING*(*)
+      CALL FVERR(0, 'Error', STRING)
+      END
+      SUBROUTINE BUSYF()
+C      WRITE(*,*)'BUSY'
+      END
+C  ROUTINES TO CONTROL CHARACTER LOOKUP
+C  FOR BOTH DNA AND PROTEIN SEQUENCES
+C  THE INITIALISING ROUTINES ARE SENT THE CHARACTERSET SIZE IDM
+C  WHICH DETERMINES WHICH CHARACTERSET IS USED
+      SUBROUTINE INITLU(IDM)
+C  AUTHOR RODGER STADEN
+      INTEGER POINT1(0:255),POINT2(0:255)
+      CHARACTER DUP*16,DLOW*16,PUP*26,PLOW*26
+      COMMON /IASCI1/POINT1
+      COMMON /IASCI2/POINT2
+      SAVE /IASCI1/
+      SAVE /IASCI2/
+      SAVE DUP,PUP,DLOW,PLOW
+      DATA DUP/'TCAG-RYWSMKHBVDN'/
+      DATA PUP/'CSTPAGNDEQBZHRKMILVFYW-X? '/
+      DATA DLOW/'tcag-rywsmkhbvdn'/
+      DATA PLOW/'cstpagndeqbzhrkmilvfyw-x? '/
+C  ICHAR RETURNS THE COLLATING SEQUENCE NUMBER
+C  I WANT 1-5 FOR ACGT OR 1-26 FOR AMINO ACIDS BY USING ICHAR. 
+C  THE ACTUAL VALUE RETURNED BY ICHAR IS NOT PORTABLE 
+C  SO I NEED TO INITIALIZE POINTR SO THAT THE CORRECT 
+C  ELEMENTS CONTAIN VALUES 1 - 5, OR 1 - 26
+C  WORKS ON UPPER AND LOWER CASE - REMOVE DLOW,PLOW AND LOOPS 41 AND 51
+C  IF LOWERCASE NOT ALLOWED
+C
+      IF(IDM.EQ.5)THEN
+        DO 30 I = 0,255
+          POINT1(I) = IDM
+          POINT2(I) = 17
+30      CONTINUE
+        DO 35 I = 1,5
+          J = ICHAR(DUP(I:I))
+          POINT1(J) = I
+35      CONTINUE
+        DO 36 I = 1,5
+          J = ICHAR(DLOW(I:I))
+          POINT1(J) = I
+36      CONTINUE
+        DO 40 I = 1,16
+          J = ICHAR(DUP(I:I))
+          POINT2(J) = I
+40      CONTINUE
+C  DEAL WITH U
+          J = ICHAR('U')
+          POINT1(J) = 1  
+          POINT2(J) = 1  
+        DO 41 I = 1,16
+          J = ICHAR(DLOW(I:I))
+          POINT2(J) = I
+41      CONTINUE
+C  DEAL WITH U
+          J = ICHAR('u')
+          POINT1(J) = 1  
+          POINT2(J) = 1  
+        ELSE IF(IDM.EQ.26)THEN
+          DO 45 I = 0,255
+            POINT1(I) = IDM
+45        CONTINUE
+C
+        DO 50 I = 1,26
+          J = ICHAR(PUP(I:I))
+          POINT1(J) = I
+50      CONTINUE
+        DO 51 I = 1,26
+          J = ICHAR(PLOW(I:I))
+          POINT1(J) = I
+51      CONTINUE
+        DO 60 I = 0,255
+          POINT2(I) = POINT1(I)
+60      CONTINUE
+      END IF
+      END
+      INTEGER FUNCTION INDEXA(STRING,ID,CHAR)
+      CHARACTER STRING(ID),CHAR
+C  FUNCTION TO FIND FIRST OCCURRENCE OF CHAR IN STRING
+      DO 10 I = 1,ID
+        IF(STRING(I).EQ.CHAR)THEN
+          INDEXA = I
+          RETURN
+        END IF
+10    CONTINUE
+      INDEXA = 0
+      END
+C     SQCOPY
+C   SEQUENCE COPYING PROGRAM
+      SUBROUTINE SQCOPY(SEQNCE,COMSEQ,IDIM)
+C   AUTHOR: RODGER STADEN
+      CHARACTER SEQNCE(IDIM),COMSEQ(IDIM)
+      DO 100 I=1,IDIM
+        COMSEQ(I)=SEQNCE(I)
+100   CONTINUE
+      RETURN
+      END
+      INTEGER FUNCTION CTONUM(CHAR)
+C  AUTHOR RODGER STADEN
+      INTEGER POINT1(0:255)
+      CHARACTER CHAR
+      COMMON /IASCI1/POINT1
+      SAVE /IASCI1/
+C
+C  GET COLLATING SEQUENCE VALUE
+      ICOL = ICHAR(CHAR)
+C  THIS POINTS TO A VALUE IN POINTR
+      CTONUM = POINT1(ICOL)
+      END
+      SUBROUTINE BUB3AS(LIST,LIST2,LIST3,IDIM)
+C   AUTHOR: RODGER STADEN
+      INTEGER LIST(IDIM),LIST2(IDIM),LIST3(IDIM)
+      I=0
+      J=0
+10    CONTINUE
+C   SET I=J IF WE HAVE JUST CORRECTLY POSITIONED AN ELEMENT
+      IF(J.GT.I)I=J
+      I=I+1
+      IF(I.EQ.IDIM)RETURN
+20    CONTINUE
+      IF(LIST(I).LE.LIST(I+1))GO TO 10
+C   FIRST MOVE THIS ELEMENT? IF SO SET POINTER TO ITS INITIAL POSITION
+      IF(J.LT.I)J=I
+      ITEMP=LIST(I)
+      LIST(I)=LIST(I+1)
+      LIST(I+1)=ITEMP
+      ITEMP=LIST2(I)
+      LIST2(I)=LIST2(I+1)
+      LIST2(I+1)=ITEMP
+      ITEMP=LIST3(I)
+      LIST3(I)=LIST3(I+1)
+      LIST3(I+1)=ITEMP
+C   DECREMENT BACK THRU LIST WITH THIS ELEMENT
+      IF(I.GT.1)I=I-1
+      GO TO 20
+      END
