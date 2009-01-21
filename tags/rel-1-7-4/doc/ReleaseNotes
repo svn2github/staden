@@ -1,0 +1,92 @@
+			Staden Package v1.7.0
+			=====================
+
+This is the first release to provide prebuilt binaries for linux on
+x86-64 (eg AMD Opterons). We do not have a windows system on this
+architecture, although the 32-bit version should still work.
+
+On the Gap4 front there have been several minor joining related
+improvements in how it scores joins in Find Internal Joins and the
+functionality of the align button in the Join Editor.
+
+Also of consequence to gap4 are the various changes to io_lib (the
+library for all I/O to various trace file formats). With the addition
+of a new hash_exp program it now allows for experiment files to be
+concatenated together and indexed. The list of experiment file names
+should stil be supplied to gap4, but provided the EXP_PATH environment
+variable has been set correctly gap4 will be able to fetch individual
+sequences out of the concatenated experiment file
+archive. Improvements to the user interface for this still need to be
+made.
+
+454 SFF archives are now better supported. The defsult 454 indices
+now work, although the hash_sff program can be used to provide an
+alternative indexing strategy (possibly faster in some cases).
+
+Gap4 and trev also have another trace display style for traces that
+have 1 sample scan (x4 channels) per base call. In this case it can
+also draw 4 confidence values instead of 1 per base. These abilities
+will allow better integration of Solexa traces when more readily
+available.
+
+Plus of course the usual mix of bug fixes and minor tweaks. See the
+full change log for details (via the SourceForge site).
+
+
+Other notable changes
+=====================
+
+Gap4
+----
+
+* Various SNP Candidates improvements. The "correlation offset" is now
+  adjustable (this controls the average correlation score needed
+  before groups are considered for automatic merging). SNP base calls
+  now work by generating a consensus rather than requiring 100%
+  identity. it now skips sequences containing a REFS note. Merging can
+  be forced until the number of groups is less than or equal to a
+  predetermined amount (NB: not usually ideal).
+
+* Shuffle pads now has a "band size" parameter for the alignments.
+  Also bug fixed in various places.
+
+* The old editor shuffle command has been replaced by strip pads. It
+  now only removes entire columns of pads and does no pad movement at
+  all.
+
+* The join editor align button will now cope better with handling long
+  alignments in repeated data, hopefully avoiding the "too long for
+  practical use of dynamic programming" message in such cases.
+
+  It also now has "<" and ">" buttons either side of the "Align"
+  button. These anchor one end of the alignment to the current overlap
+  position and then only align from that point leftwards or
+  rightwards. This helps to force an alignment to anchor at a specific
+  location which is useful when aligning data consisting of multiple
+  repeat elements.
+
+* Alignments found by Find Internal Joins now take into account the
+  alignment score in addition to the percentage identity. This means
+  that no longer will a 100bp overlap at 100% identity be considered
+  as a better overlap than a 2kb overlap at 99% identity.
+
+* The Contig Navigation window now has Page Up and Page Down
+  keybindings for previous and next match. It also has the ability to
+  automatically display traces at the appropriate regions using the
+  contig editors "Auto-display traces" functionality.
+
+* The "View List" window now has a Save button.
+
+Io_lib
+------
+
+* New programs: hash_exp, hash_sff, append_sff, extract_fastq.
+
+* Added TRACE_PATH and EXP_PATH environment variables to use in
+  preference to RAWDATA (when defined).
+
+* Now uses libcurl instead of wget for much faster web based trace
+  fetching.
+
+
+
