@@ -1,0 +1,703 @@
+#include <assert.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "tg_gio.h"
+#include "tg_struct.h"
+
+#define _IOLIB 2
+#include "bam.h"
+#include "faidx.h"
+#include "bam_maqcns.h"
+
+typedef struct {
+    bam1_t *b;
+    char *seq;
+    char *conf;
+    int seq_len;
+    int alloc_len;
+    int mqual;
+    int pos;
+    int left;
+} bam_seq_t;
+
+typedef struct {
+    GapIO *io;
+    const char *fn;
+    bam_seq_t *seqs;
+    int nseq;
+    int max_seq;
+    int no_tree;
+    int merge_contigs;
+    HacheTable *pair;
+    HacheTable *libs;
+    contig_t *c;
+    int n_inserts;
+    int count;
+    bam_header_t *header;
+} bam_io_t;
+
+typedef struct {
+    int rec;
+    int bin;
+    int idx;
+    int crec;
+    int pos;
+} pair_loc_t;
+
+int bio_extend_seq(bam_io_t *bio, int snum, char base, int conf);
+
+/*
+ * Allocates a new bam_seq_t entry in bam_io_t struct.
+ * We use a single indexed array counting from 0 to N-1 representing the
+ * N active sequences in a bam_pileup1_t struct. This may mean we have
+ * O(D^2) complexity for depth D, so if we find this becomes a bottleneck
+ * then we can replace the bam_seq_t array with an ordered linked list
+ * instead.
+ *
+ * Returns the sequence index on success
+ *         -1 on failure
+ */
+int bio_new_seq(bam_io_t *bio, const bam_pileup1_t *p, int pos) {
+    int i;
+    bam_seq_t *s;
+
+    //printf("New seq %d at %d %s\n", bio->nseq, pos, bam1_qname(p->b));
+
+    if (bio->nseq == bio->max_seq) {
+	bio->max_seq = bio->max_seq ? bio->max_seq * 2 : 256;
+	bio->seqs = (bam_seq_t *)realloc(bio->seqs,
+					 bio->max_seq * sizeof(bam_seq_t));
+	if (!bio->seqs)
+	    return -1;
+    }
+    
+    s = &bio->seqs[bio->nseq];
+    s->alloc_len = p->b->core.l_qseq+10;
+    s->seq = (char *)malloc(s->alloc_len);
+    s->conf = (char *)malloc(s->alloc_len);
+    for (i = 0; i < p->qpos; i++) {
+	s->seq[i] = bam_nt16_rev_table[bam1_seqi(bam1_seq(p->b), i)];
+	s->conf[i] = bam1_qual(p->b)[i];
+    }
+    s->seq_len = i;
+    s->pos = pos - i;
+    s->b = p->b;
+    s->left = i;
+
+    return bio->nseq++;
+}
+
+typedef union {
+    char  *s;
+    int    i;
+    float  f;
+    double d;
+} bam_aux_t;
+
+/*
+ * Searches for 'key' in the bam auxillary tags.
+ *
+ * If found, key type and value are filled out in the supplied
+ * 'type' and 'val' pointers. These may be supplied as NULL if the
+ * caller simply wishes to test for the presence of a key instead.
+ *
+ * Returns 0 if found
+ *        -1 if not
+ */
+int bam_aux_find(bam1_t *b, char *key, char *type, bam_aux_t *val) {
+    char *s = bam1_aux(b);
+    int match = 0;
+
+    while ((uint8_t *)s < b->data + b->data_len) {
+	if (s[0] == key[0] && s[1] == key[1])
+	    match = 1;
+
+	switch (s[2]) {
+	case 'A':
+	    if (type) *type = 'A';
+	    if (val) val->i = *(s+3);
+	    s+=4;
+	    break;
+
+	case 'C':
+	    if (type) *type = 'i';
+	    if (val) val->i = *(uint8_t *)(s+3);
+	    s+=4;
+	    break;
+
+	case 'c':
+	    if (type) *type = 'i';
+	    if (val) val->i = *(int8_t *)(s+3);
+	    s+=4;
+	    break;
+
+	case 'S':
+	    if (type) *type = 'i';
+	    if (val) {
+		char tmp[2]; /* word aligned data */
+		tmp[0] = s[3]; tmp[1] = s[4];
+		val->i = *(uint16_t *)tmp;
+	    }
+	    s+=5;
+	    break;
+
+	case 's':
+	    if (type) *type = 'i';
+	    if (val) {
+		char tmp[2]; /* word aligned data */
+		tmp[0] = s[3]; tmp[1] = s[4];
+		val->i = *(int16_t *)tmp;
+	    }
+	    s+=5;
+	    break;
+
+	case 'I':
+	    if (type) *type = 'i';
+	    if (val) {
+		char tmp[4]; /* word aligned data */
+		tmp[0] = s[3]; tmp[1] = s[4]; tmp[2] = s[5]; tmp[3] = s[6];
+		val->i = *(uint16_t *)tmp;
+	    }
+	    s+=7;
+	    break;
+
+	case 'i':
+	    if (type) *type = 'i';
+	    if (val) {
+		char tmp[4]; /* word aligned data */
+		tmp[0] = s[3]; tmp[1] = s[4]; tmp[2] = s[5]; tmp[3] = s[6];
+		val->i = *(int16_t *)tmp;
+	    }
+	    s+=7;
+	    break;
+
+	case 'f':
+	    if (type) *type = 'f';
+	    if (val) memcpy(&val->f, s+3, 4);
+	    s+=7;
+	    break;
+
+	case 'd':
+	    if (type) *type = 'd';
+	    if (val) memcpy(&val->d, s+3, 8);
+	    s+=11;
+	    break;
+
+	case 'Z': case 'H':
+	    if (type) *type = s[2];
+	    s+=3;
+	    if (val) val->s = s;
+	    while (*s++);
+	    break;
+
+	default:
+	    fprintf(stderr, "Unknown aux type '%c'\n", s[2]);
+	    return -1;
+	}
+
+	if (match)
+	    return 0;
+
+    }
+
+    return -1;
+}
+
+
+/*
+ * Removes a sequence from the bam_io_t struct.
+ * This actually performs the main work of adding a sequence to the gap5
+ * database.
+ *
+ * Returns 0 on success
+ *        -1 on failure
+ */
+int bio_del_seq(bam_io_t *bio, const bam_pileup1_t *p, int snum) {
+    bam_seq_t *bs;
+    bam1_t *b;
+    seq_t s;
+    bin_index_t *bin;
+    range_t r, *r_out;
+    HacheItem *hi;
+    int recno, i, paired;
+    GapIO *io = bio->io;
+    char tname[1024];
+    library_t *lib = NULL;
+    bam_aux_t val;
+    char type;
+    const char *LB;
+    HacheData hd;
+    int new = 0;
+
+    if (snum < 0 || snum >= bio->nseq)
+	return -1;
+
+    bio->count++;
+
+    bs = &bio->seqs[snum];
+    b = bs->b;
+
+    /* Fetch read-group and pretend it's a library for now */
+    if (0 == bam_aux_find(b, "RG", &type, &val) && type == 'Z') {
+	LB = val.s;
+    } else {
+	LB = bio->fn;
+    }
+
+    hd.p = NULL;
+    hi = HacheTableAdd(bio->libs, (char *)LB, strlen(LB), hd, &new);
+    if (new) {
+	int lrec;
+	printf("New library %s\n", LB);
+
+	lrec = library_new(bio->io);
+	lib = get_lib(bio->io, lrec);
+	hi->data.p = lib;
+	cache_incr(bio->io, lib);
+    }
+    lib = hi->data.p;
+
+    /*
+    printf("\nSeq %d @ %6d: '%.*s' '%.*s' => nseq=%d\n",
+	   snum, bs->pos, bs->seq_len, bs->seq, bs->seq_len, bs->conf,
+	   bio->nseq-1);
+    */
+
+    /* Construct a seq_t struct */
+    s.right = bs->seq_len;
+    for (i = p->qpos+1; i < b->core.l_qseq; i++) {
+	int base = bam_nt16_rev_table[bam1_seqi(bam1_seq(p->b), i)];
+	int qual = bam1_qual(p->b)[i];
+	bio_extend_seq(bio, snum, base, qual);
+    }
+    s.pos = bs->pos;
+    s.len = bs->seq_len;
+    s.seq_tech = STECH_SOLEXA;
+    s.flags = 0;
+    s.left = bs->left+1;
+    s.parent_type = 0;
+    s.parent_rec = 0;
+    s.name_len = strlen(bam1_qname(b));
+    s.data = (char *)malloc(s.name_len + 3 + 2*s.len);
+    s.name = s.data;
+    s.trace_name = s.name + s.name_len + 1;
+    *s.trace_name = 0;
+    s.trace_name_len = 0;
+    s.alignment = s.trace_name + s.trace_name_len + 1;
+    *s.alignment = 0;
+    s.alignment_len = 0;
+    s.seq = s.alignment + s.alignment_len+1;
+    s.conf = s.seq+s.len;
+    s.mapping_qual = b->core.qual;
+    s.format = SEQ_FORMAT_MAQ; /* pack bytes */
+    s.anno = NULL;
+
+    strcpy(s.name, bam1_qname(b));
+    memcpy(s.seq,  bs->seq,  s.len);
+    memcpy(s.conf, bs->conf, s.len);
+    
+    if (bam1_strand(b)) {
+	complement_seq_t(&s);
+	s.flags |= SEQ_COMPLEMENTED;
+    }
+
+    /* Create the range */
+    r.start = s.pos;
+    r.end = s.pos + (s.len > 0 ? s.len : -s.len) - 1;
+    r.rec = 0;
+    r.pair_rec = 0;
+    r.mqual = s.mapping_qual;
+    r.flags = GRANGE_FLAG_TYPE_SINGLE;
+
+    paired = (b->core.flag & BAM_FPAIRED) ? 1 : 0;
+    if (b->core.flag & BAM_FREAD1)
+	s.flags |= SEQ_END_FWD;
+    if (b->core.flag & BAM_FREAD2)
+	s.flags |= SEQ_END_REV;
+    strcpy(tname, s.name);
+    if (s.name_len >= 2 && s.name[s.name_len-2] == '/') {
+	tname[s.name_len-2] = 0;
+	/* Check validity of name vs bit-fields */
+	if ((s.name[s.name_len-1] == '1' &&
+	     (s.flags & SEQ_END_MASK) != SEQ_END_FWD) ||
+	    (s.name[s.name_len-1] == '2' &&
+	     (s.flags & SEQ_END_MASK) != SEQ_END_REV)) {
+	    fprintf(stderr, "Inconsistent read name vs flags: %s vs 0x%02x\n",
+		    s.name, b->core.flag);
+	}
+    }
+
+    if (paired)
+	r.flags |= (s.flags & SEQ_END_MASK) == SEQ_END_FWD
+	    ? GRANGE_FLAG_END_FWD
+	    : GRANGE_FLAG_END_REV;
+    else
+	/* Guess work here. For now all <--- are rev, all ---> are fwd */
+	r.flags |= bam1_strand(b)
+	    ? GRANGE_FLAG_END_FWD
+	    : GRANGE_FLAG_END_REV;
+    if (bam1_strand(b)) {
+	r.flags |= GRANGE_FLAG_COMP1;
+    }
+
+    bin = bin_add_range(io, &bio->c, &r, &r_out);
+
+    /* Add the sequence */
+    s.bin = bin->rec;
+    s.bin_index = r_out - ArrayBase(range_t, bin->rng);
+    recno = sequence_new_from(io, &s);
+
+    // Simulations of fetching sequence data from source file instead.
+    // recno = bio->count;
+
+#if 0
+    /* Demo code for tagging sequences */
+    if (memcmp(s.seq, "TAG", 3) == 0) {
+	range_t er;
+	anno_ele_t *e;
+	char comment[1024];
+
+	er.start = r.start;
+	er.end = er.start + 2;
+	if (random()%10) {
+	    er.mqual = GT_Seq;   /* obj_type */
+	    er.pair_rec = recno; /* obj_rec */
+	} else {
+	    er.mqual = GT_Contig;
+	    er.pair_rec = 0;
+	}
+	er.flags = GRANGE_FLAG_ISANNO; /* anno_rec, not supported yet */
+	sprintf(comment,":seq=%d,pos=%d..%d:", recno,r.start,r.end);
+	er.rec = anno_ele_new(io, bin->rec, GT_Seq, recno, 0, comment);
+
+	e = (anno_ele_t *)cache_search(io, GT_AnnoEle, er.rec);
+	e = cache_rw(io, e);
+	
+	//bin_add_anno_range(io, &bio->c, &er, NULL);
+	bin_add_range(io, &bio->c, &er, NULL);
+    }
+#endif
+
+    /* Find the read-pair if appropriate */
+    if (bio->pair /* && !(b->core.flag & (BAM_FMUNMAP | BAM_FUNMAP)) */) {
+	int new = 0;
+	HacheData hd;
+	pair_loc_t *pl;
+
+	/* Add data for this end */
+	pl = (pair_loc_t *)malloc(sizeof(*pl));
+	pl->rec  = recno;
+	pl->bin  = bin->rec;
+	pl->crec = bio->c->rec;
+	pl->pos  = s.len >= 0 ? s.pos : s.pos - s.len - 1;
+	pl->idx  = s.bin_index;
+	hd.p = pl;
+
+	hi = HacheTableAdd(bio->pair, tname, strlen(tname), hd, &new);
+
+	/* Pair existed already */
+	if (!new) {
+	    pair_loc_t *po = (pair_loc_t *)hi->data.p;
+	    bin_index_t *bo;
+	    range_t *ro;
+
+	    /* We found one so update r_out now, before flush */
+	    r_out->flags &= ~GRANGE_FLAG_TYPE_MASK;
+	    r_out->flags |=  GRANGE_FLAG_TYPE_PAIRED;
+	    r_out->pair_rec = po->rec;
+
+	    /* Link other end to 'us' too */
+	    bo = (bin_index_t *)cache_search(io, GT_Bin, po->bin);
+	    bo = cache_rw(io, bo);
+	    bo->flags |= BIN_RANGE_UPDATED;
+	    ro = arrp(range_t, bo->rng, po->idx);
+	    ro->flags &= ~GRANGE_FLAG_TYPE_MASK;
+	    ro->flags |=  GRANGE_FLAG_TYPE_PAIRED;
+	    ro->pair_rec = pl->rec;
+
+	    /* Increment insert size in library */
+	    if (po->crec == pl->crec) {
+		//int pos = s.len >= 0 ? s.pos : s.pos - s.len - 1;
+		int isize = pl->pos - po->pos;
+
+		/*
+		 * We can get +ve isize via:
+		 * |------->     <-------|
+		 *
+		 * and -ve isize via:
+		 * <-------|
+		 *    |------->
+		 *
+		 * We know that 's' is the right-most sequence so
+		 * when this_pos as the input is sorted.
+		 * Therefore we can tell which case it is by the orientation
+		 * of this sequence, and negate isize for the 2nd case.
+		 */
+		if (!(r_out->flags & GRANGE_FLAG_COMP1))
+		    isize = -isize;
+
+		lib = cache_rw(bio->io, lib);
+		if ((r_out->flags & GRANGE_FLAG_COMP1) != 
+		    (ro->flags & GRANGE_FLAG_COMP1)) {
+		    accumulate_library(bio->io, lib,
+				       isize >= 0
+				           ? LIB_T_INWARD
+				           : LIB_T_OUTWARD,
+				       ABS(isize));
+		} else {
+		    accumulate_library(bio->io, lib, LIB_T_SAME, ABS(isize));
+		}
+	    }
+
+	    /* And, making an assumption, remove from hache */
+	    HacheTableDel(bio->pair, hi, 1);
+	    free(pl);
+	}
+    }
+
+    /* Link bin back to sequence too before it gets flushed */
+    r_out->rec = recno;
+
+    /* Tidy up */
+    if (bs->seq)  free(bs->seq);
+    if (bs->conf) free(bs->conf);
+    free(s.data);
+
+    if (snum+1 < bio->nseq)
+	memmove(bs, bs+1, (bio->nseq - (snum+1)) * sizeof(*bs));
+
+    bio->nseq--;
+	    
+    return 0;
+}
+
+/*
+ * Adds a base to a sequence in the bio_io_t struct.
+ * Returns 0 on success
+ *        -1 on failure
+ */
+int bio_extend_seq(bam_io_t *bio, int snum, char base, int conf) {
+    bam_seq_t *s;
+
+    if (snum < 0 || snum >= bio->nseq)
+	return -1;
+
+    s = &bio->seqs[snum];
+
+    /* Extend if appropriate */
+    if (s->seq_len >= s->alloc_len) {
+	s->alloc_len += 100;
+	if (NULL == (s->seq  = (char *)realloc(s->seq,  s->alloc_len)))
+	    return -1;
+	if (NULL == (s->conf = (char *)realloc(s->conf, s->alloc_len)))
+	    return -1;
+    }
+    
+    /* And append */
+    s->seq [s->seq_len] = base;
+    s->conf[s->seq_len] = conf;
+    s->seq_len++;
+
+    return 0;
+}
+
+/*
+ * Called once for every position (pos) in every contig (tid), with an 
+ * array of n sequences (pl).
+ *
+ * We produce our own stack of reads that we append to, spotting new
+ * sequences (p->is_head) and terminating sequences (p->is_tail) flushing
+ * out our data to disk only on sequence removal. It's possible we could
+ * hijack the pl->b bam1_t struct with our own pointer, putting it back to
+ * the the bam1_t only on removal.
+ */
+int bio_callback(uint32_t tid, uint32_t pos, int n, const bam_pileup1_t *pl,
+		void *data) {
+    bam_io_t *bio = (bam_io_t *)data;
+    GapIO *io = bio->io;
+    int i, j, insertions = 0;
+    static int last_tid = -1;
+
+    /*
+     * tid is reference id - aka contig
+     * n is number of sequences at this point (pos).
+     * pl is the pileup info for these sequences.
+     */
+    /* Create new contig if appropriate */
+    if (tid != last_tid) {
+	char *cname = bio->header->target_name[tid];
+
+	/* header->target_name[b.core.tid] */
+	printf("\n++Processing contig %d / %s\n", tid, cname);
+	if (bio->c)
+	    cache_decr(io, bio->c);
+	if (!bio->merge_contigs ||
+	    (NULL == (bio->c = find_contig_by_name(io, cname)))) {
+	    bio->c = contig_new(io, cname);
+	    contig_index_update(io, cname, strlen(cname), bio->c->rec);
+	}
+	cache_incr(io, bio->c);
+
+	bio->n_inserts = 0;
+
+	last_tid = tid;
+    }
+
+    //    printf("Callback at pos=%d n=%d tid=%d\n", pos, n, tid);
+    for (j = 0; j <= insertions; j++) {
+	//printf("%d pos: %6d.%d ", tid, pos+1+bio->n_inserts, j);
+	for (i = 0; i < n; i++) {
+	    const bam_pileup1_t *p = &pl[i];
+	    
+	    if (j == 0 && p->is_head) {
+		int i2;
+		/* New sequence */
+		//printf("^%c", p->b->core.qual+33);
+		i2 = bio_new_seq(bio, p, pos+1+bio->n_inserts);
+		assert(i == i2);
+	    }
+
+	    if (p->is_del) {
+		/* Undercall, aka deleted base compared to ref */
+		int q = (bam1_qual(p->b)[p->qpos] + 
+			 (p->qpos < p->b->core.l_qseq-1
+			  ? bam1_qual(p->b)[p->qpos+1]
+			  : bam1_qual(p->b)[p->qpos])) / 2;
+		bio_extend_seq(bio, i, '*', q);
+	    } else {
+		if (p->indel >= 0) {
+		    int c, q;
+
+		    /* Overcall - edit all other seqs */
+		    if (insertions < p->indel)
+			insertions = p->indel;
+
+		    if (j <= p->indel) {
+			c = bam_nt16_rev_table[bam1_seqi(bam1_seq(p->b),
+							 p->qpos + j)];
+			q = bam1_qual(p->b)[p->qpos+j];
+		    } else {
+			c = '*';
+			q = (bam1_qual(p->b)[p->qpos] + 
+			     (p->qpos < p->b->core.l_qseq-1
+			      ? bam1_qual(p->b)[p->qpos+1]
+			      : bam1_qual(p->b)[p->qpos])) / 2;
+		    }
+		    bio_extend_seq(bio, i, c, q);
+		} else if (p->indel < 0 && j == 0) {
+		    /*
+		     * This occurs when the next base is an undercall.
+		     * However THIS base should still exist, I think.
+		     * It's all a little bit confusing if truth be known.
+		     */
+		    int c = tolower(bam_nt16_rev_table[bam1_seqi(bam1_seq(p->b), p->qpos)]);
+		    int q = bam1_qual(p->b)[p->qpos];
+		    bio_extend_seq(bio, i, c, q);
+		}
+	    }
+	}
+    }
+
+    for (i = n-1; i >= 0; i--) {
+	const bam_pileup1_t *p = &pl[i];
+	
+	if (p->is_tail) {
+	    bio_del_seq(bio, p, i);
+	}
+    }
+    
+    bio->n_inserts += insertions;
+    //    if (insertions) {
+    //	printf("%d insertions (%d) at pos=%d\n", insertions, bio->n_inserts, pos);
+    //    }
+
+    return 0;
+}
+
+
+int parse_bam(GapIO *io, const char *fn,
+	      int no_tree, int pair_reads, int merge_contigs)
+{
+    bam_io_t *bio = (bam_io_t*)calloc(1, sizeof(*bio));
+    bam1_t *b;
+    int ret, count = 0;
+    bam_plbuf_t *plbuf;
+    bamFile fp;
+
+    /* Setup bam_io_t object and create our pileup interface */
+    bio->io = io;
+    bio->seqs = NULL;
+    bio->nseq = 0;
+    bio->max_seq = 0;
+    bio->no_tree = no_tree;
+    bio->merge_contigs = merge_contigs;
+    bio->c = NULL;
+    bio->count = 0;
+    bio->fn = fn;
+    bio->libs = HacheTableCreate(256, HASH_DYNAMIC_SIZE);
+    bio->libs->name = "libs";
+
+    if (pair_reads) {
+	bio->pair = HacheTableCreate(32768, HASH_DYNAMIC_SIZE);
+	bio->pair->name = "pair";
+    } else {
+	bio->pair = NULL;
+    }
+
+    fp = bam_open(fn, "r");
+    assert(fp);
+    bio->header = bam_header_read(fp);
+    plbuf = bam_plbuf_init(bio_callback, bio);
+    //bam_plbuf_set_mask(plbuf, BAM_DEF_MASK /* or BAM_FUNMAP? */);
+    bam_plbuf_set_mask(plbuf, 0 /* or BAM_DEF_MASK, or BAM_FUNMAP? */);
+
+    /*
+     * Loop through reads - the bulk of the work here is done in the
+     * bio_callback function.
+     */
+    b = (bam1_t*)calloc(1, sizeof(bam1_t));
+    while ((ret = bam_read1(fp, b)) >= 0) {
+	bam_plbuf_push(b, plbuf);
+	if ((++count & 0xffff) == 0) {
+	    putchar('.');
+	    fflush(stdout);
+	    cache_flush(io);
+	}
+    }
+    putchar('\n');
+    bam_plbuf_push(0, plbuf);
+    bam_plbuf_destroy(plbuf);
+
+    cache_flush(io);
+    printf("Loaded %d sequences\n", bio->count);
+
+    /* Tidy up */
+    if (b) {
+	if (b->data)
+	    free(b->data);
+	free(b);
+    }
+
+    if (fp)
+	bam_close(fp);
+
+    if (bio) {
+	if (bio->pair)
+	    HacheTableDestroy(bio->pair, 1);
+
+	if (bio->libs)
+	    HacheTableDestroy(bio->libs, 0);
+
+	if (bio->header)
+	    bam_header_destroy(bio->header);
+
+	if (bio->seqs)
+	    free(bio->seqs);
+	free(bio);
+    }
+
+    return 0;
+}
