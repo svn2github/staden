@@ -1,0 +1,240 @@
+*	Fix sam output when a sequence is *AGCTA or AGCTAG*. We get
+        things like 1D10M or 10M1D which breaks samtools and
+        consequentially tg_index too.
+
+*	Investigate use of seq_t->bin_index field. This is primarily
+        used for the sequence_get_pair function and or the
+        read-pairing during tg_index (which needs a rewrite
+        anyway). Perhaps just duplicating range_t->pair_rec into the
+        seq_t struct and removing bin_index field instead (so it's no
+        larger in storage) would be better.
+
+	The reason I'd like to remove this is that currently it means
+	we cannot remove from a bin Range array; only mark as unused
+	instead. (Removal would mean shuffling data down and
+	consequentially updating all seq_t structs to have a new
+	bin_index value.)
+
+	It has impact on seq_t->mapping_qual vs range_t->mqual
+	though. Currently this is duplicated. Should we treat the
+	ranges array copy as simply a cache for faster viewing, or
+	should we actually treat it as the primary copy and remove the
+	duplicates? If we do the latter then we still need a fast way
+	of going from seq_t to the range_t linking to it. One
+	possibility would be to require that the data in a range_t
+	array is sorted by position and then record number (and it
+	probably is already), which allows for binary search.
+
+*	Implement a proper record deallocation (or reuse) system.
+	Right now contig_destroy and anno_ele_destroy just unlink the
+	record, but leave the disk space used up.
+
+*	NOTE: questionable change - need to ponder.
+
+	When adding annotation elements for sequences, attempt to
+        store in the same bin that the sequence resides in even if
+        they could fit in a smaller bin. Eg right now:
+
+	 +---------------------+
+         |A     ......seq....  |
+         +-----------+---------+
+         |B          | .tag.  C|
+	 +-----------+---------+
+               
+	.tag. on this sequence ends up in bin C while the sequence is
+	in bin A.
+
+	The reason for wanting both in the same bin is it makes some
+	bin manipulation algorithsm (eg break contig) easier if we
+	know items attached to each other share the same bin.
+
+	Suggest we create a bin_add_range_to() function that takes an
+	existing bin and avoids the call to find bin for range.
+
+*	When adding data in pair mode (tg_index -p), try using a 2
+        pass affair. We observe that it slows down linearly and grows
+        memory linearly. This is due to random scattering of
+        read-pairs rather than neatly in order. This also translates
+        to random I/O instead of mostly serial. Solution is:
+
+	1) When we have 1st_read (written) and 2nd_read (just loaded
+           from input data), do not edit 1st_read to point to
+           2nd_read. Instead write the ID of 1st+2nd to a file. Use a
+           2nd pass at end to relink all the 1st reads to their 2nd.
+
+	2) To reduce memory, perioidically purge the read name hash
+           table and write out the purged data to a file too for
+           subsequent fixing. This step would need a sort algorithm I
+           think to relink 1st and 2nd together as both copies will
+           need fixing.
+
+*	Removal of iwidgets/itcl/itk?  itcl/itk widgets: itcl/itk =>
+	{prefinish, spin, spin2, seqed}/*.itk
+
+	iwidgets => *gap4/acd2tag.tcl, *contig_editor (tabset), gap_prefinish
+		    *pregap4/gui.tcl (tabnotebook)
+		    seqed/*
+		    spin/*
+		    spin2/*
+		    spin_emboss/* (via acd2tcl)
+
+*	Improve library displays and auto-sensing.
+
+*	Consensus caching (DONE)
+
+*	Improved depth caching (min/max as well as average)
+
+*	Finish tag editing (DONE?)
+
+*	Implement annotation links as well as annotation elements.
+
+*	Add visualisation of annotations in template display.
+
+*	Split up template display into multiple panels, for GC, depth,
+        annotation, etc tracks.
+
+*	Maq/BAM can store unaligned data where one end of a read-pair
+	maps and the other end does not. The unaligned read is stored
+	adjacen to the aligned read and just has a flag saying it's
+	unaligned. Currently tg_index strips these out.
+
+	Add a -u option to tg_index to store this with an appropriate
+	flag. Add a function to gap5 to dump out a fastq of unaligned
+	reads over a specific region. The purpose is, for example, to
+	perform denovo assembly of unaligned reads around a deletion
+	in order to identify the deleted sequence.
+
+*	Contig notifications should be per io (base or child) and not
+        solely on the base? Alternatively they should always be the
+        base but the actual io should be known so windows can ignore
+        ignore or delay handling of io events.
+
+* 	Fix editor UNDO. (Only works for Tcl controlled I/O atm)
+
+*	DONE: Sequence blocks.
+	The caching layer has 1 record per sequence. But rec>>10 gives
+	1024 sequences with the same record; pack 1024 in the same
+	block using tg_iface_g.c and use the bottom 10 bits as an
+	indicator to which sequence we wish to unpack.
+
+	This means some level of caching involved too so we don't keep
+	compressing and uncompressing the same sequence blocks
+	repeatedly. Which implies tg_cache.c is probably the correct
+	layer, perhaps using a new data type GT_SeqBlock?
+
+*	DONE: Add type/format to iface_g I/O
+	Every object should start with 3 bits type, 5 bits format.
+	- This means we can change the layout of a packed struct and
+	  support both old and new layout formats.
+	- It also means we can type check and spot stray reads of the
+	  wrong object type.
+
+*	DONE: Better formatting of bin range arrays.
+	- Try storing start + length instead of start + end.
+	- Replace start with delta from previous start.
+	- Encode final number series in int7 format instead to reduce
+	  size.
+
+*	DONE: Add a means to detect the number of sequences in a contig.
+	- Note contig breaking means maybe we need to know this at a
+	  bin level; how many sequences are in this bin and below.
+	- How to keep this information up to date without undue costs.
+	Idea: update the bin we add to + the root bin (or contig
+	struct). Add checks in most bin-walking algorithms that
+	automatically correct for incorrect bin->nseqs figures. (ie
+	parent = child[0] + child[1] counts.)
+	
+
+*	DONE: Contig joining
+
+*	DONE: Contig breaking
+
+*	Annotations
+	partially done.
+
+*	Improved input/output formats
+	(DONE: except for $variable expansion)
+
+*	Store alignments for trace displaying
+	(PARTIALLY DONE: needs better format and use of them)
+
+*	Mixed assemblies
+	- splitting reads by type (sanger, solid, 454, solexa)
+
+*	Searching
+	- by sequence? (DONE)
+	- by position (DONE - padded only)
+	- by name (done, but needs a rewrite to speed it up)
+
+*	Fix reading name indexing.
+	- B+Tree is OK for searching and small updates, but updating
+	serially for every read 1 at a time is Nlog(N) complexity and
+	becomes slow.
+	- Suggest binning names to temporary files as we read them and
+	then sorting within the bins and bulk uploading of the B+Tree.
+
+*	DONE: Improve template display speed. Maybe C code for rendering to
+        a pixmap instead.
+
+	- Store other_end / template info in the range_t array instead
+          of the seq struct. This avoids performing seq_t when drawing
+          data pictorially. (DONE)
+
+*	DONE: Implement Magnus' Y coordinate algorithm for templates - based
+        on size.  (DONE)
+
+*	DONE: Libraries / ligations
+
+*	DEBUG version:
+	Cache items should have an md5 sum for the data structure
+        created at population.
+	Upon removal of cache, if the md5 sum has changed but our data
+        hasn't been marked for r/w then we should fail. Alternatively
+        if our data has been marked r/w but the md5 sum hasn't changed
+        then we can print a warning about unnecessary writing of data
+	structures.
+
+
+BUG: Join Contigs with containment and one contig not starting at 1
+causes issues.
+Ie KEEP_POSITIONS defined in editor_join. Break suis1 at 17000. Join
+suis1 and suis#1 with suis#1@17000 aligned against suis1@7000. This
+gives incorrect start position and indeed seems to muddle left and
+right contig somewhat.
+
+
+Annotations
+-----------
+
+Annotations consist of two parts, an annotation element and the
+annotation itself, which is a means of collating the elements
+together. The annotation elements have a start/end range and are
+attached to sequences or contigs.
+
+This means that we can have one annotation element per sequence
+marking a repeat, but all annotation elements are essentially part of
+the same annotation. Hence we can tell which other sequences share
+this annotation.
+
+Similarly we could have one annotation with two elements, each at the
+end of a contig. This forms a link between the two contigs and can
+represent scaffolding or overlap graphs.
+
+In short:
+
+anno_element
+	record type/number (GT_Seq/2378123, GT_Contig/4, etc);
+	text comment
+	anno_rec (link to anno below)
+
+anno
+	key (aka tag type)
+	value (the text contents)
+	Array of anno_element
+
+
+The positioning of the annotation elements will be held in the contig
+bin structures, just like sequences. Hence they get moved about by
+insertions, deletions, joins, etc.
+
+

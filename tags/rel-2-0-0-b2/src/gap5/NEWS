@@ -1,0 +1,354 @@
+Gap5 1.2.4,  October 13th 2009
+==============================
+
+Minor changes
+-------------
+
+*	Tags can be created and/or removed within the contig editor
+        now, rather than just imported.
+
+*	Gap4's "Sequence Search" function has been added to Gap5,
+        allowing for DNA string matches against either the consensus
+        and/or the sequences themselves.
+
+*	Name indexing (tg_index -t) now operates much faster
+        (sometimes 100x speed-ups). It also occupies far less space in
+        the gap5 database, but note that this comes at a cost of
+        incompatibility with older Gap5 formats. (This gap5 should be
+        able to load up old Gap5 databases, just not vice-versa.)
+
+*	(Experimental) The consensus algorithm can now cache the
+        consensus, when in read-write mode. This dramatically speeds
+        up computing the consensus for subsequent functions at a cost
+        of a bit more storage space.
+
+*	Improvements to the build system, especially on 64-bit
+        machines and RedHat derived systems. The --with-iwidgets=DIR
+        parameter now has more leeway too and works when given either
+        the parent directory or the iwidgets sub-directory.
+	"Make depend" is no longer mandatory either.
+
+*	Tg_index now attempts to automatically work out the file
+        format (eg sam, bam, ace, baf, etc). The old "aln" default
+        format has been removed.
+
+*	Tg_index now supports reading sam files. In addition to this
+        ace, baf and sam files may now be gzipped.
+
+*	Tags now interpret "\n" as newline within BAF files.
+
+Bug fixes
+---------
+
+*	Selecting a region in the contig editor that spans a tag no
+        longer crashes Gap5.
+
+*	Fixed a crash when highlighting reading some names in the
+        contig editor (buffer overrun).
+
+*	When exporting to ACE format we now write DS lines again, as
+        they're needed by consed. Also fixed generation of BS segments
+        when adjoining zero-depth regions.
+
+*	Export to SAM format should generate better behaved
+        flags. Additionally all positions should now be >= 1, even if
+        not positioned that way in gap5 itself. (A shift occurs to
+        ensure this is true.)
+
+
+Gap5 1.2.3,  August 7th 2009
+============================
+
+Now integrated into the staden package release system (2.0.0b1).
+
+Minor changes
+-------------
+
+*	Added a -f (fast mode) parameter to tg_index. When linking
+        read-pairs this links A' to A but not A back to A'. This
+        reverse link is desireable, but currently causes major I/O
+        bottlenecks on very large data sets. I'll address this later
+        in a better fix, so -f will probably be only a temporary
+        option.
+
+*	The code can now build without samtools support, although
+        obviously it loses the ability to read .bam files.
+
+*	Compilation from source is vastly easier, as is the rest of
+        the staden package.
+
+Bug fixes
+---------
+
+*	Break contig and join contig are no longer crashing. They also
+        now keep track of the number of sequences in the contigs and
+        break-contig moves annotations where appropriate too.
+
+*	Fixed a bug that incorrectly caused tags to be considered as
+        sequences in some case, causing crashes.
+
+*	The mouse-over for the  contig editor names display now works
+        better, no longer attempting to display tag information.
+
+*	Fixed for copy-on-write of seq/anno blocks, sometimes causing
+        crashes when saving the contig editor.
+
+*	Clicking on an annotation in the editor no longer causes
+        crashes.
+
+*	Removed buffer overrun in the editor get_number method.
+
+
+Gap5 1.2.2,  June 22nd 2009
+===========================
+
+Minor bug fix release.
+
+Minor changes
+-------------
+
+
+*	Added a Hide Annotation setting in the contig editor. This is
+        also bound to control-Q (as per Gap4). This allows us a quick
+        way to see the quality values underneath a tag.
+
+*	Annotion contents are now visible in the editor information
+        line, but the "Tag editor" itself still hasn't been ported
+        over from Gap4.
+
+*	Changed SAM reading of LB tags to use TG tags. In practice
+        libraries rarely seem to appear directly in the sequence
+        lines, but instead occur in read-groups. In theory we should
+        then check the main read-group header for LB links from there,
+        but for now treating a library as a group (eg a run or a lane)
+        is perhaps more useful than a genuine library grouping.
+
+*	Lots of internal code tweaking to support newer versions of
+        Tcl/Tk (tested with 8.6b1). For now we still ship with 8.4,
+        but this is the first stage of making the code more portable
+        and easier to build from source.
+
+*	Extra slider (there's too many I know - it's overdue a
+        redesign) in the template display. This governs the "stacking"
+        y-mode, controlling where the data gets binned into groups. Eg
+        every 1k so that templates 0-1000 are stacked together,
+        1000-2000bp are below, 2000-3000 below those, etc.
+
+Bug fixes
+---------
+
+*	Removed a memory corruption when displaying long sequence
+        tags (> 1Kb).
+
+*	Removed issues with diagonal lines appearing at the start
+        of the library insert-size distribution plot.
+
+*	Removed unneeded dependency on C++ (libstdc++.so.5) and
+        FORTRAN (libg2c0.so) libraries.
+
+*	The contig selector window now internally uses more 64-bit
+        integers. This fixes issues where the total contig length grew
+        beyond 2Gb.
+
+*	Initialised more elements in some of the data structures.
+        Previously some parts of range_t struct were
+        uninitialised. Hopefully this resolves some of the random ACE
+        related errors (unknown).
+
+
+Gap5 1.2.1,  June 15th 2009
+===========================
+
+Mostly just a bug fix release.
+
+Bug fixes / minor changes
+-------------------------
+
+*	caf2baf now supports annotations.
+
+*	Fixed a crash when storing sequences with trace names that
+        substantially differ to the read names.
+
+*	Compiling with optimisation now works correctly. (Previous
+        release was built with debugging and no optimisation, so the
+        errors were not apparent.)
+
+
+Gap5 1.2.0,  June 10th 2009
+===========================
+
+*INCOMPATIBILITY* The files written by tg_index and read/written by
+gap5 are not in the same format as those produced by v1.1.x.
+If you wish to migrate existing gap5 databases then it is recommended
+that you use the Export Sequences function in 1.1.3 to output in BAF
+format, and reindex them using tg_index v1.2.0 with the -B option.
+
+
+Key changes
+-----------
+
+*	Major reduction in disk space required.
+	Gap5 databases are now (de)compressed on the fly and so are a
+	fraction of their original size. In most cases they'll be
+	~20-30% smaller than an input BAM file too.
+
+	This change has also meant less I/O and in particular fewer
+	random file seeks. Hence Gap5 is better behaved on the Lustre
+	filesystem, although local storage of NFS are still faster.
+
+*	Minimal support for libraries. This is still work in progress,
+        but the LB tag in sam/bam format is now used to separate
+        sequences into libraries. (More work on this to follow,
+        including better use of this information and adding library
+        support to other input file formats.)
+
+*	Can now export in ACE format too.
+
+*	Added a -z option to tg_index to allow user specified block
+        sizes. I'd suggest using this (eg "tg_index -z 64k") on sparse
+        alignment files.
+
+*	Annotatons (aka "tags" in Gap4) have been added. For now these
+        are visible by colouration, but no interaction is possible
+        yet. The full tag editor is planned for later 1.2.x releases.
+
+
+Bug fixes / minor changes
+-------------------------
+
+*	Fixed a bug in the Export Sequences function. It occasionally
+        missed sequences at the very start of a contig.
+
+*	Fixed ACE file reading of complemented data.
+
+*	The file format changes also included better error
+        checking. The encoding of each data type now includes the data
+        type itself (to ensure we've found the expected type of data)
+        and a format code. The format codes should allow for more
+        graceful file format changes in the future.
+
+*	Fixed a bug in the count of how many sequences are in each
+        contig.
+
+
+Gap5 1.1.3.1,  May 15th 2009
+============================
+
+A minor change to support exporting the data in a variety of formats,
+to facilitate migrating from one Gap5 release to the next. (The next
+one will have substantially smaller database sizes and faster I/O.)
+
+
+Key changes
+-----------
+
+*	Added an "Export Sequences" function to the main File
+        menu. This can output in fasta, fastq, sam or baf format.
+
+
+Gap5 1.1.3,  April 24th 2009
+============================
+
+This version is backwards compatible with v1.1.2 file formats.
+
+Key changes
+-----------
+
+*	The contig editor "pack sequences" mode now behaves much
+        better. The editing cursor, mouse overs, editing and selecting
+	all now correctly compensate for the layout change.
+
+	Additionally the names panel, which was useless in pack
+        sequences mode, now displays a reduced ascii layout of the
+        sequences allowing for the mapping quality to be shaded
+        there and to easily visualise the sequence orientation.
+
+*	The contig editor cursor (editing cursor, not scrollbar
+        position) is now both visible and dragable from within the
+        template display.
+
+*	ACE format support in tg_index is back, and it no longer
+        chokes on RT, CT and WA lines. Although at present I do not
+        add this data to the gap5 database.
+
+*	The contig selector no longer automatically displays at start
+        up if there are more than 1000 contigs. Using the -csel
+        command line option will forcibly override this check (along
+        with the previously implemented -no_csel option to never
+        display the contig selector on startup).
+
+*	The join editor settings now apply to both editors rather than
+        just one. Undo/Redo apply to the last used editor and on mouse-
+        over they highlight which editor they currently apply to.
+
+Bug fixes / minor changes
+-------------------------
+
+* 	The compute_ypos() function used for the pack sequences mode
+        of the editor now uses the faster algorithm developed for the
+        template display. Hence "Stacking" mode is now faster.
+
+*	Undo/Redo now behaves better when multiple editors are in use
+        on the same contig. Similarly the edits are redrawn instantly
+        in other editor views.
+
+*	(Transparent to users, for now.) The initial implementation of
+        annotations is in place. This is listed as a minor change for
+        now as currently there are no user-defined ways to add tags to
+        the database. Warning: this will lead to a file format change
+        soon.
+
+
+Gap5 1.1.2,  April 3rd 2009
+===========================
+
+Features
+--------
+
+*	The template display now sports a "Filter" button. This allows
+        certain types of data to be filtered in/out by mapping
+        quality, template consistency, whether it spans contigs and
+        whether single/paired.
+	(Future plans here include by ligation and/or instrument type.)
+
+*	The template display Y-mode of "stacking" should now be MUCH
+        faster when given deep data sets.
+
+*	Added the ability to select regions of a sequence or a reading
+	name from the contig editor so that cut and paste works. (From
+	the editor, but not into it yet.)
+
+*	The number of sequences in a contig is now displayed in the
+	contig selector and contig list windows.
+
+
+Bug fixes / minor adjustments
+-----------------------------
+
+*	The template display crosshair now correctly displays the Y
+	coordinate in the bottom status line.
+
+*	Fixed a bug in the consensus algorithm; the last base was
+	incorrect when the contig was 1 base longer than an exact
+	multiple of 1024bp.
+
+*	Sped up the Save Consensus command when dealing with many
+	contigs.
+
+*	Tweaked the Y-spread function of the template display so that
+	multiple sequences with both identical X and Y coordinates now
+	get spread apart.
+
+*	The contig editor now instantly displays the impact of making
+	insertions or deletions instead of only correctly displaying
+	all sequences on the next scroll.
+
+*	Fixed an issue of opening contigs when given a reading name
+	instead of a contig name.
+
+*	The contig editor sequence no longer vanishes temporarily when
+	scrolling the sequence names.
+
+
+Gap5 1.1.1,  March 19th 2009
+============================
