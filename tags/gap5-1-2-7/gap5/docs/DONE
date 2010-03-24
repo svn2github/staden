@@ -1,0 +1,151 @@
+*	BUG: Undo doesn't fix edits to tag type / comment.
+
+*	BUG: Moving seqs doesn't move tags on them.
+
+*	BUG: No libpng-devel causes compilation errors still, rather than
+        ignoring it as configure implies. (It's still in global.mk)
+
+*	On REG_JOIN_TO, the [$ed io] needs updating to a valid io for
+        the contig we're joining to. Rerun "$ed init"? Not quite as we
+        don't want to destroy the edview, just update io. Maybe
+        overload [$ed io $new_io]. (CHECK: done?)
+
+*	The contig editor needs to handle REG_COMPLEMENT. Either shut
+        down or refresh. The complement function also needs to check
+        for write access on the root bin & contig struct.
+
+*	BUG: FIJ, launch main, hit align, kill window ('x'), say no,
+	launch main again, hit align, press save => "error -1".
+
+	Cause is that the view is invalid - we're attempting to write
+	a view that has already been freed. Presumably free in the
+	base_io, but still cached so we didn't request a new view?
+
+	Is the problem that the gdb client is the same for io child and
+	io_base, so when we gio_close of io child we can end up
+	freeing views that are still in use of io base?
+
+	(DONE: problem was base and child both having a reference to
+	the same locked view, so do not unlock from child.)
+
+*	$w(io) is top io, eg .e1(io), but we may have two editors as
+        in a join editor:
+
+  w:.e1.ed0.pane.seq.sheet     io:io=0xe5cd40/io=0xe10770    base:io=0x89aa50
+  w:.e1.ed1.pane.seq.sheet     io:io=0xe10770/io=0xe10770    base:io=0x89aa50
+
+*	After joining, we need to purge the undo history.
+
+*	FIJ - don't clear plot after a join.
+
+*	BUG - delete last visible base in a seq and undo => base gets added
+	back as hidden data.
+
+*	BUG: cannot open a database we do not have write access to
+        unless we explicitly say -ro. Without it we get a cryptic
+        error that to the untrained user would imply the database does
+        not exist.
+
+*	Read clipping - cannot do right now.
+
+*	BUG: Outputting to BAF doesn't save consensus tags
+
+*	BUG: DEMO.0.baf: cannot scroll right on read velvet_read#171 unless
+        cutoffs shown. Also, can scroll left into cutoff data even
+        when cutoffs are not shown.
+
+*	BUG: FIJ with Contig6 with Contig4 in DEMO.0.baf, bring up
+        join editor, hit align, then quit (not join).
+	Bring up editor for second time and we see the edits have been
+        retained. (DONE)
+
+*	BUG: Moving a sequence in the editor and then highting name
+        gives crash a crash (s->rec != r->rec).
+	Also it means up/down arrow skips lines or doesn't work correct.
+
+*	Control-a and control-e should go to the start/end of clipped
+	region when cutoffs aren't visible. (Both seq + cons)
+
+*	BUG: Cut and paste from contig editor fails on complemented
+        contigs.
+
+*	BUG: Tag undo (and tag creation) fails on complemented
+        contigs.
+
+*	BUG: moving sequences fails on complemented contigs.
+
+*	BUG: move 1st sequence left such that it's in a negative
+        position and we lose all display. Why?
+
+*	BUG: Export consensus sometimes leaves pads in even when we
+        asked to remove them. (DONE)
+
+*	BUG: can join contig1 to contig1 and hit save. We then get no
+        contig1 at all. (DONE)
+
+*	DONE? Fix sam output when a sequence is *AGCTA or AGCTAG*. We
+	get things like 1D10M or 10M1D which breaks samtools and
+	consequentially tg_index too.
+
+*	Consensus caching (DONE)
+
+*	Finish tag editing (DONE?)
+
+*	DONE: Sequence blocks.
+	The caching layer has 1 record per sequence. But rec>>10 gives
+	1024 sequences with the same record; pack 1024 in the same
+	block using tg_iface_g.c and use the bottom 10 bits as an
+	indicator to which sequence we wish to unpack.
+
+	This means some level of caching involved too so we don't keep
+	compressing and uncompressing the same sequence blocks
+	repeatedly. Which implies tg_cache.c is probably the correct
+	layer, perhaps using a new data type GT_SeqBlock?
+
+*	DONE: Add type/format to iface_g I/O
+	Every object should start with 3 bits type, 5 bits format.
+	- This means we can change the layout of a packed struct and
+	  support both old and new layout formats.
+	- It also means we can type check and spot stray reads of the
+	  wrong object type.
+
+*	DONE: Better formatting of bin range arrays.
+	- Try storing start + length instead of start + end.
+	- Replace start with delta from previous start.
+	- Encode final number series in int7 format instead to reduce
+	  size.
+
+*	DONE: Add a means to detect the number of sequences in a contig.
+	- Note contig breaking means maybe we need to know this at a
+	  bin level; how many sequences are in this bin and below.
+	- How to keep this information up to date without undue costs.
+	Idea: update the bin we add to + the root bin (or contig
+	struct). Add checks in most bin-walking algorithms that
+	automatically correct for incorrect bin->nseqs figures. (ie
+	parent = child[0] + child[1] counts.)
+	
+
+*	DONE: Contig joining
+
+*	DONE: Contig breaking
+
+*	Improved input/output formats
+	(DONE: except for $variable expansion)
+
+*	Searching
+	- by sequence? (DONE)
+	- by position (DONE - padded only)
+	- by name (done, but needs a rewrite to speed it up)
+
+*	DONE: Improve template display speed. Maybe C code for rendering to
+        a pixmap instead.
+
+	- Store other_end / template info in the range_t array instead
+          of the seq struct. This avoids performing seq_t when drawing
+          data pictorially. (DONE)
+
+*	DONE: Implement Magnus' Y coordinate algorithm for templates - based
+        on size.  (DONE)
+
+*	DONE: Libraries / ligations
+
