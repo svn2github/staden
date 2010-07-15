@@ -1,0 +1,52 @@
+Rebuilding documention
+======================
+
+For this you'll need multiple dependencies, including:
+
+    bourne shell
+    sed/awk/grep
+    perl
+    tcl
+    texinfo
+    TeX (eg "tetex-bin" package)
+    emacs (for texinfo mode)
+    m4
+    imagemagick
+
+There are two versions of the manual, one for unix and one for
+windows, although they are very similar. You will need to either type
+"make unix" or "make windows" depending on which set of documentation
+you wish to build.
+
+You may also wish to redefine PAPER in the makefile. By default we
+build A4, but PAPER=us will use US letter format instead. Eg:
+
+      make unix PAPER=us
+
+Note that rebuilding the main manual subdirectory only works well from
+a clean directory. This is a long-standard bug, but it can be worked
+around by typing "(cd manual; make spotless)".
+
+
+Installing documention
+======================
+
+Use "make install PREFIX=<dir>" to install the package documentation
+somewhere. This is entirely platform independent, so the documentation
+will be copied to ${PREFIX}/share/man/ and ${PREFIX}/share/doc/staden/.
+
+This copies manuals previously been built in the first step.
+
+Without redefining the PREFIX variable the documentation will be
+installed into the "_inst" local subdirectory. PREFIX defined here
+should be th same --prefix used when configuring and building the main
+Staden Package source directory.
+
+
+Building a source distribution
+==============================
+
+If you've edited the manual and wish to rebuild a new documentation
+"source" package, the command is "make distsrc".
+
+This will create a staden-<version>-doc.tar.gz file.

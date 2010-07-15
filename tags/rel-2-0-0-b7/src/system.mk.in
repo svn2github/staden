@@ -1,0 +1,133 @@
+# Override the old bits that depended on $(MACHINE)
+PWD=@PWD@
+SRCROOT=$(PWD)/@srcdir@
+O=.
+L=$(PWD)/lib
+
+#-----------------------------------------------------------------------------
+# Third party package dependencies
+
+#-- libcurl
+CURL_LIB          = @LIBCURL@
+CURL_INC          = @LIBCURL_CPPFLAGS@
+
+#-- zlib
+ZLIB_LIB          = @ZLIB_LDFLAGS@
+ZLIB_INC          = @ZLIB_CFLAGS@
+#ZLIB_VERSION     = @ZLIB_VERSION@
+
+#-- samtools 
+SAMTOOLS_LIB      = @SAMTOOLS_LDFLAGS@
+SAMTOOLS_INC      = @SAMTOOLS_CFLAGS@
+#SAMTOOLS_VERSION = @SAMTOOLS_VERSION@
+
+#-- liblzma 
+LZMA_LIB          = @LZMA_LDFLAGS@
+LZMA_INC          = @LZMA_CFLAGS@
+#LZMA_VERSION     = @LZMA_VERSION@
+
+#-- libpng
+PNG_LIB           = @PNG_LDFLAGS@
+PNG_INC           = @PNG_CFLAGS@
+
+#-- staden-io_lib
+IOLIB_LIB	  = @IO_LIB_LDFLAGS@
+IOLIB_INC	  = @IO_LIB_CFLAGS@
+
+#-- Curses / NCurses
+CURSES_LIB	  = @CURSES_LDFLAGS@
+CURSES_INC        = @CURSES_CFLAGS@
+
+#-- X windows
+X_LIB		  = @X_LIBS@
+INCLUDES         += @X_CFLAGS@
+
+#-- Tcl/Tk
+#TCL_INC	  = @TCL_INCLUDE_SPEC@
+TCL_INC		  = @TCL_INCLUDES@
+TCL_LIB	  	  = @TCL_LIB_SPEC@ @TCL_LIBS@
+
+TK_INC		  = @TK_INCLUDES@ @TCL_INCLUDES@
+TK_LIB		  = @TK_LIB_SPEC@ @TCL_LIB_SPEC@ @TK_LIBS@
+
+
+
+
+#-----------------------------------------------------------------------------
+# Compiler/linking options
+
+# -rpath-link is passed to the linker here to avoid needing to set
+# LD_LIBRARY_PATH during linking, although it will still be needed to be set
+# at run-time unless we modify these to -rpath instead of -rpath-link.
+#
+# We only do this currently for the other libraries within this package and
+# for staden-io_lib.
+
+# How else do we get commas in a subst text or pattern?
+comma = ,
+
+CC		  = @CC@
+CFLAGS		  = @CFLAGS@ $(DEFINES) $(INCLUDES)
+CXX		  = @CXX@
+CXXFLAGS	  = @CXXFLAGS@ $(DEFINES) $(INCLUDES)
+CPP		  = @CPP@
+CPPFLAGS	  = @CPPFLAGS@
+LDFLAGS		  = -L$(L) @LDFLAGS@
+#CLDFLAGS	  = -L$(L) -Wl,-rpath-link,$(L) $(subst -L,-Wl$(comma)-rpath-link$(comma),$(filter -L%,$(IOLIB_LIB)))
+CLDFLAGS	  = -L$(L)
+CXXLDFLAGS	  = $(CLDFLAGS)
+F77		  = @F77@
+FFLAGS		  = @FFLAGS@
+
+EXTRA_LIBS	  = @LIBS@
+
+
+# Large file support
+# (Enabled automatically due to AC_SYS_LARGEFILE & AC_FUNC_FSEEKO ?)
+
+# Dynamic linking options. These mainly come from querying how Tcl worked.
+# Note for windows we'll need to change SHLIB_PREFIX. (TODO)
+# Do we also need to add SHLIB_SONAME somewhere? On irix this is:
+# SHLIB_SONAME = $(@:$(L)/%=-soname %)
+#
+SHLIB_CFLAGS      = @SHLIB_CFLAGS@
+SHLIB_LD          = @SHLIB_LD@
+SHLIB_LDFLAGS     = $(CFLAGS) $(LDFLAGS)
+SHLIB_PREFIX      = lib
+SHLIB_SUFFIX      = @SHLIB_SUFFIX@
+SHLIB_SONAME      =
+SHLIB_OUTFLAG     = -o $(SPACE)
+EXTRA_LIBS       += @DL_LIBS@
+
+# Best guess for C++
+SHLIB_CXXFLAGS    = $(SHLIB_CFLAGS)
+SHLIB_LDXX        = @SHLIB_LDXX@
+SHLIB_LDXXFLAGS   = $(SHLIB_LDFLAGS)
+
+# Best guess for fortran
+SHLIB_FFLAGS      = $(SHLIB_CFLAGS)
+
+
+#-----------------------------------------------------------------------------
+# Install options
+
+# Our libraries are I think exclusively used by us, hence we pick
+# our own subdirectory.
+prefix         = @prefix@
+exec_prefix    = @exec_prefix@
+INSTALLLIB     = @libdir@/staden
+INSTALLBIN     = @bindir@
+#INSTALLETC     = @sysconfdir@/staden
+INSTALLSHARE   = @datadir@/staden
+INSTALLDOC     = @datadir@/doc
+INSTALLMAN     = @mandir@
+INSTALLSCRIPTS = $(INSTALLSHARE)/scripts
+INSTALLTCL     = $(INSTALLSHARE)/tcl
+
+# Data and etc config files are shoehorned into one place for now, as
+# traditionally this all ended up in $STADTABL
+INSTALLETC     = $(INSTALLSHARE)/etc
+INSTALLDATA    = $(INSTALLSHARE)/etc
+
+# Keep autoconf happy
+datarootdir = @datarootdir@
