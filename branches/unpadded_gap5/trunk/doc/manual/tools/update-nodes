@@ -1,2 +1,0 @@
-#!/bin/sh
-emacs -batch $1 -l $0.el

@@ -1,6 +1,0 @@
-#!/bin/sh
-
-# To run:
-# make_fasta `cat fofn.passed` > fasta_filename
-
-extract_seq -good_only -fasta_out ${@+"$@"}
