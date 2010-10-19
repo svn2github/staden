@@ -1,0 +1,43 @@
+\input epsf     % -*-texinfo-*-
+\input texinfo
+@c %**start of header
+@setfilename gap5.info
+@setcontentsaftertitlepage
+@setshortcontentsaftertitlepage
+@settitle Gap5
+@setchapternewpage odd
+@iftex
+@afourpaper
+@end iftex
+@setchapternewpage odd
+@c %**end of header
+
+@set standalone
+include(header.m4)
+
+@setprog{gap5}{Gap5}
+
+@titlepage
+@title @Prog{}
+@subtitle 
+@author James Bonfield, Wellcome Trust Sanger Institute
+@page
+@vskip 0pt plus 1filll
+_include(copyright.texi)
+@end titlepage
+
+@node Top
+@ifinfo
+@top top-gap5
+@end ifinfo
+
+_include(gap5-t.texi)
+
+_split()
+@node Index
+@unnumbered Index
+@printindex cp
+
+@shortcontents
+@contents
+@bye
