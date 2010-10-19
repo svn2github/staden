@@ -379,10 +379,10 @@ int construct_seq_from_block(tg_args *a,seq_t *s, baf_block *b, char **tname) {
     s->trace_name = s->name + s->name_len + 1;
     strcpy(s->trace_name, trace_name);
 
-    s->alignment = s->trace_name + s->trace_name_len + 1;
-    strcpy(s->alignment, alignment);
+    s->alignment = (unsigned char *)s->trace_name + s->trace_name_len + 1;
+    strcpy((char *)s->alignment, alignment);
 
-    s->seq = s->alignment + s->alignment_len + 1;
+    s->seq = (char *)s->alignment + s->alignment_len + 1;
     memcpy(s->seq, seq, len);
 
     s->conf = s->seq + len;
@@ -483,7 +483,7 @@ int parse_baf(GapIO *io, char *fn, tg_args *a) {
 		
 	    if (pair) is_pair = 1;
 		
-	    recno = save_range_sequence(io, &seq, seq.mapping_qual, pair,
+	    recno = save_range_sequence(io, &seq, 0, 0, seq.mapping_qual, pair,
 					is_pair, tname, c, a, flags, NULL);
 
 	    /* For anno */

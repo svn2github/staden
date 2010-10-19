@@ -1151,8 +1151,8 @@ static int read_data(zfp *fp, GapIO *io, tg_args *a, contig_t **c, HacheTable *p
 	    strcpy(seq.trace_name, trace_name);
 	}
 
-	seq.alignment = seq.trace_name + seq.trace_name_len + 1;
-	seq.seq = seq.alignment + seq.alignment_len + 1;
+	seq.alignment = (unsigned char *)seq.trace_name + seq.trace_name_len + 1;
+	seq.seq = (char *)seq.alignment + seq.alignment_len + 1;
 	seq.alignment = 0;
 
 	memcpy(seq.seq, sq.seq, sq.s_len);
@@ -1173,7 +1173,7 @@ static int read_data(zfp *fp, GapIO *io, tg_args *a, contig_t **c, HacheTable *p
 
 	if (pair) is_pair = 1;
 	
-	recno = save_range_sequence(io, &seq, seq.mapping_qual, pair,
+	recno = save_range_sequence(io, &seq, 0, 0, seq.mapping_qual, pair,
 					is_pair, template_name, *c, a, flags, NULL);
 					
 	if (trace_name) {

@@ -98,31 +98,37 @@ proc io_undo_exec {w crec cmdu} {
     set io [$w io]
 
     foreach cmd $cmdu {
-	foreach {code op1 op2 op3 op4} $cmd break
+	foreach {code op1 op2 op3 op4 op5} $cmd break
 	switch -- $code {
 	    C_SET {
-		$w set_cursor $op1 $op2 $op3 1
+		$w set_cursor $op1 $op2 $op3 $op4
 		# This may change the Cutoffs status, so update button
 		set top [set ${w}(top)]
 		global $top
 		set ${top}(Cutoffs) [lindex [$w configure -display_cutoffs] 4]
 	    }
 
+	    A_SET {
+		set seq [$io get_sequence $op1]
+		$seq set_cigar $op2
+		$seq delete
+	    }
+
 	    B_REP {
 		set seq [$io get_sequence $op1]
-		$seq replace_base $op2 $op3 $op4
+		$seq replace_ubase $op2 $op3 $op4 $op5
 		$seq delete
 	    }
 
 	    B_INS {
 		set seq [$io get_sequence $op1]
-		$seq insert_base $op2 $op3 $op4
+		$seq insert_ubase $op2 $op3 $op4 $op5
 		$seq delete
 	    }
 
 	    B_DEL {
 		set seq [$io get_sequence $op1]
-		$seq delete_base $op2
+		$seq delete_ubase $op2 $op3
 		$seq delete
 	    }
 
@@ -303,6 +309,7 @@ proc contig_register_callback {ed type id args} {
 	    # A bit obscure, but it ensures edSetApos() is called in C,
 	    # keeping cached absolute and relative positions in sync
 	    # incase the edit was moving a sequence.
+	    puts cursor=[$ed get_cursor relative]
 	    eval $ed set_cursor [$ed get_cursor relative]
 	}
 
@@ -341,7 +348,8 @@ proc contig_register_callback {ed type id args} {
 		if {[$ed contig_rec] == $arg(seq)} {
 		    $ed set_cursor 17 $arg(seq) $arg(abspos)
 		} else {
-		    $ed set_cursor 18 $arg(seq) $arg(pos)
+		    puts "$ed set_cursor 18 $arg(seq) $arg(pos) $arg(nth)"
+		    $ed set_cursor 18 $arg(seq) $arg(pos) $arg(nth)
 		}
 	    }
 	}
@@ -1277,6 +1285,10 @@ proc editor_undo_info {top {clear 0}} {
 	switch -- $code {
 	    C_SET { }
 
+	    A_SET {
+		lappend msg "Change CIGAR string $op2"
+	    }
+
 	    B_REP {
 		set s [$io get_sequence $op1]
 		lappend msg "Change base in seq [$s get_name] at $op2 to base $op3, qual $op4"
@@ -1392,19 +1404,28 @@ proc editor_edit_base {w call where} {
 	return
     }
 
-    foreach {type rec pos} $where break;
+    foreach {type rec pos nth} $where break;
     if {$type == 18} {
 	set seq [$io get_sequence $rec]
-	foreach {old_call old_conf} [$seq get_base $pos] break
-	$seq replace_base $pos $call 100
+	foreach {old_call old_conf} [$seq get_ubase $pos $nth] break
+	set old_cig [$seq get_cigar]
+	$seq replace_ubase $pos $nth $call 100
+	set new_cig [$seq get_cigar]
 	$seq delete
+
+	puts OLD:$old_cig
+	puts NEW:$new_cig
 
 	foreach {type rec _pos} [$w get_cursor relative] break
 	$w cursor_right
-	store_undo $w \
-	    [list \
-		 [list C_SET $type $rec $pos] \
-		 [list B_REP $rec $pos $old_call $old_conf] ] {}
+	set ul [list [list C_SET $type $rec $pos $nth] \
+		     [list B_REP $rec $pos $nth $old_call $old_conf]]
+	if {$new_cig != $old_cig} {
+	    lappend ul [list A_SET $rec $old_cig]
+	}
+	store_undo $w $ul {}
+
+	puts "old_call=$old_call"
     }
 
     $w redraw
@@ -1420,16 +1441,24 @@ proc editor_insert_gap {w where} {
 	return
     }
 
-    foreach {type rec pos} $where break;
+    $w cursor_left
+    foreach {type rec pos nth} [$w get_number] break;
+
     if {$type == 18} {
 	set seq [$io get_sequence $rec]
-	$seq insert_base $pos * 20
+	set old_cig [$seq get_cigar]
+	$seq insert_ubase $pos $nth * 20
+	set new_cig [$seq get_cigar]
 	$seq delete
 
-	store_undo $w \
-	    [list \
-		 [list C_SET $type $rec $pos] \
-		 [list B_DEL $rec $pos] ] {}
+	set ul [list \
+		    [list C_SET $type $rec $pos $nth] \
+		    [list B_DEL $rec $pos $nth] ]
+	if {$new_cig != $old_cig} {
+	    lappend ul [list A_SET $rec $old_cig]
+	}
+
+	store_undo $w $ul {}
     } else {
 	set contig [$io get_contig $rec]
 	$contig insert_base $pos
@@ -1437,7 +1466,7 @@ proc editor_insert_gap {w where} {
 
 	store_undo $w \
 	    [list \
-		 [list C_SET $type $rec $pos] \
+		 [list C_SET $type $rec $pos 0] \
 		 [list C_DEL $rec $pos] ] {}
     }
     $w cursor_right
@@ -1455,23 +1484,23 @@ proc editor_delete_base {w where {powerup 0}} {
 	return
     }
 
-    foreach {type rec pos} $where break;
-
     $w cursor_left
-    incr pos -1
+    foreach {type rec pos nth} [$w get_number] break;
 
     if {$type == 18} {
 	set seq [$io get_sequence $rec]
-	foreach {old_base old_conf} [$seq get_base $pos] break
+	foreach {old_base old_conf} [$seq get_ubase $pos $nth] break
 	foreach {l0 r0} [$seq get_clips] break;
 
-	if {$old_base != "*" && !$powerup} {
+	if {$old_base != "*" && $old_base != "+" && $old_base != "-" && !$powerup} {
 	    bell
 	    $w cursor_right
 	    return
 	}
 
-	$seq delete_base $pos
+	set old_cig [$seq get_cigar]
+	$seq delete_ubase $pos $nth
+	set new_cig [$seq get_cigar]
 
 	# Identify if we're in a situation where we need to undo the clip
 	# points too. This occurs when, for example, we delete the last base
@@ -1479,24 +1508,36 @@ proc editor_delete_base {w where {powerup 0}} {
 	# start of the used portion, making that base now visible instead.
 	# We use a belt and braces method by temporarily adding a base back
 	# to check our clip points are consistent
-	$seq insert_base $pos A 0
-	foreach {l1 r1} [$seq get_clips] break;
-	$seq delete_base $pos
+#	$seq insert_ubase $pos $nth A 0
+#	foreach {l1 r1} [$seq get_clips] break;
+#	$seq delete_ubase $pos $nth
+	set l1 l0
+	set r1 r0
 
 	$seq delete
 
-	if {$l0 != $l1 || $r0 != $r1} {
-	    store_undo $w \
-		[list \
-		     [list C_SET $type $rec [expr {$pos+1}]] \
-		     [list B_INS $rec $pos $old_base $old_conf] \
-		     [list B_CUT $rec $l0 $r0]] {}
-	} else {
-	    store_undo $w \
-		[list \
-		     [list C_SET $type $rec [expr {$pos+1}]] \
-		     [list B_INS $rec $pos $old_base $old_conf]] {}
+	# Correct cursor positioning, which depends on if deleting the
+	# last base in an insertion or not.
+	foreach {_ _ p1 n1} [$w get_number] break
+	$w cursor_right
+	foreach {_ _ p2 n2} [$w get_number] break
+	if {$p1 == $p2} {
+	    $w cursor_left
 	}
+
+	set ul [list \
+		    [list C_SET $type $rec [expr {$pos+1}] 0] \
+		    [list B_INS $rec $pos $nth $old_base $old_conf]]
+
+	if {$l0 != $l1 || $r0 != $r1} {
+	    lappend ul [list B_CUT $rec $l0 $r0]
+	}
+
+	if {$new_cig != $old_cig} {
+	    lappend ul [list A_SET $rec $old_cig]
+	}
+
+	store_undo $w $ul {}
     } else {
 	set contig [$io get_contig $rec]
 
@@ -1515,10 +1556,30 @@ proc editor_delete_base {w where {powerup 0}} {
 
 	store_undo $w \
 	    [list \
-		 [list C_SET $type $rec [expr {$pos+1}]] \
+		 [list C_SET $type $rec [expr {$pos+1}] 0] \
 		 [list C_INS $rec $pos $pileup]] {}
     }
     
+    $w redraw
+}
+
+proc editor_cigar_op {w where op is_indel} {
+    set io [$w io]
+    foreach {type rec pos nth} $where break;
+
+    if {$type == 18} {
+	set seq [$io get_sequence $rec]
+	set old_cig [$seq get_cigar]
+	$seq edit_cigar_op $pos $nth $op $is_indel
+	set new_cig [$seq get_cigar]
+	$seq delete
+
+	set ul [list \
+		    [list C_SET $type $rec $pos $nth] \
+		    [list A_SET $rec $old_cig]]
+	store_undo $w $ul {}
+    }
+
     $w redraw
 }
 
@@ -1693,9 +1754,9 @@ proc update_brief {w {name 0} {x {}} {y {}}} {
     global $w
 
     if {$x != "" && $y != ""} {
-	foreach {type rec pos} [$w get_number $x $y] break
+	foreach {type rec pos nth} [$w get_number $x $y] break
     } else {
-	foreach {type rec pos} [$w get_number] break
+	foreach {type rec pos nth} [$w get_number] break
     }
 
     if {$name} {
@@ -1713,11 +1774,11 @@ proc update_brief {w {name 0} {x {}} {y {}}} {
     if {$name} {
 	switch $type {
 	    18 {
-		set msg [$w get_seq_status $type $rec $pos \
+		set msg [$w get_seq_status $type $rec $pos $nth \
 			     [keylget gap5_defs READ_BRIEF_FORMAT]]
 	    }
 	    17 {
-		set msg [$w get_seq_status $type $rec $pos \
+		set msg [$w get_seq_status $type $rec $pos $nth \
 			     [keylget gap5_defs CONTIG_BRIEF_FORMAT]]
 	    }
 	    21 {
@@ -1730,15 +1791,15 @@ proc update_brief {w {name 0} {x {}} {y {}}} {
     } else {
 	switch $type {
 	    18 {
-		set msg [$w get_seq_status $type $rec $pos \
+		set msg [$w get_seq_status $type $rec $pos $nth \
 			     [keylget gap5_defs BASE_BRIEF_FORMAT1]]
 	    }
 	    17 {
-		set msg [$w get_seq_status $type $rec $pos \
+		set msg [$w get_seq_status $type $rec $pos $nth \
 			     [keylget gap5_defs BASE_BRIEF_FORMAT2]]
 	    }
 	    21 {
-		set msg [$w get_seq_status $type $rec $pos \
+		set msg [$w get_seq_status $type $rec $pos $nth \
 			     [keylget gap5_defs TAG_BRIEF_FORMAT]]
 		regsub -all "\n" $msg { \n } msg
 	    }
@@ -1888,7 +1949,7 @@ proc tag_editor_launch {w where} {
     }
 
     if {[llength $where] != 1} {
-	foreach {type rec pos} $where break;
+	foreach {type rec pos nth} $where break;
 	if {$type != 21} return
     } else {
 	set rec $where
@@ -1934,7 +1995,8 @@ proc tag_editor_create {w} {
     global $w
     set rec -1
     
-    foreach {otype orec start end} [$w select get] break;
+    puts [$w select get]
+    foreach {otype orec start start_nth end end_nth} [$w select get] break;
 
     global .Tag.$rec
     upvar \#0 .Tag.$rec d
@@ -1944,7 +2006,9 @@ proc tag_editor_create {w} {
     set d(otype)   $otype
     set d(orec)    $orec
     set d(start)   $start
+    set d(start_n) $start_nth
     set d(end)     $end
+    set d(end_n)   $end_nth
     set d(anno)    "default"
     set d(default) "?"
 
@@ -2058,9 +2122,9 @@ proc editor_autoscroll {e} {
     global $e.AutoScroll $e.AutoScrollEvent
     if {[catch {jog_editor $e [set $e.AutoScroll]}] == 0} {
 	if {[set $e.AutoScroll] > 0} {
-	    $e select to [lindex [$e configure -width] end]
+	    $e select to [lindex [$e configure -width] end] 0
 	} else {
-	    $e select to 0
+	    $e select to 0 0
 	}
 	set $e.AutoScrollEvent [after 50 "editor_autoscroll $e"]
     }
@@ -2700,7 +2764,12 @@ bind Editor <Key-g> {editor_edit_base %W g [%W get_number]}
 bind Editor <Key-t> {editor_edit_base %W t [%W get_number]}
 bind Editor <Key-u> {editor_edit_base %W t [%W get_number]}
 bind Editor <Key-asterisk> {editor_edit_base %W * [%W get_number]}
-bind Editor <Key-i> {editor_insert_gap %W [%W get_number]}
+#bind Editor <Key-p> {editor_insert_gap %W [%W get_number]}
+bind Editor <Key-i> {editor_cigar_op %W [%W get_number] I 0}
+bind Editor <Key-m> {editor_cigar_op %W [%W get_number] M 0}
+bind Editor <Key-d> {editor_cigar_op %W [%W get_number] D 1}
+bind Editor <Key-p> {editor_cigar_op %W [%W get_number] P 1}
+bind Editor <Key-x> {editor_cigar_op %W [%W get_number] "" 1}
 bind Editor <Key-Delete> {editor_delete_base %W [%W get_number]}
 bind Editor <Key-BackSpace> {editor_delete_base %W [%W get_number]}
 bind Editor <Control-Key-Delete> {editor_delete_base %W [%W get_number] 1}
@@ -2754,8 +2823,8 @@ bind Editor <Shift-Control-Key-Page_Down> {%W xview scroll  +1000000 units}
 bind Editor <Shift-Control-Key-Page_Up>   {%W xview scroll  -1000000 units}
 
 # Selection control for adding tags
-bind Editor <<select-drag>> {%W select to @%x; editor_select_scroll %W %x}
-bind Editor <<select-to>>   {%W select to @%x}
+bind Editor <<select-drag>> {%W select to @%x 0; editor_select_scroll %W %x}
+bind Editor <<select-to>>   {%W select to @%x 0}
 bind Editor <<select-release>>	{editor_autoscroll_cancel %W}
 bind EdNames <2> {editor_name_select %W [%W get_number @%x @%y]}
 
@@ -2763,7 +2832,7 @@ bind EdNames <<select>> {
     set where [%W get_number @%x @%y]
     if {$where == ""} return
 
-    foreach {type rec pos} $where break
+    foreach {type rec pos nth} $where break
     if {$type != 18} return
 
     global EdNames_select

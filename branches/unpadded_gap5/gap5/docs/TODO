@@ -1,3 +1,19 @@
+unpadded:
+
+- Tags: Need pos/nth for both start & end
+- hard-clips & "N" cigar ops
+- consensus cache (disabled!)
+- count base* functions
+- join contigs
+- sam export
+- import/export other formats
+- consensus editing
+  - cons vs reference (how to force ref edits)
+  - insert/del columns of data
+- editor names panel
+
+-----------------------------------------------------------------------------
+
 *	tg_index.c explicitly sets io->db->seq_name_index = 0 if we
         don't do -t. Ideally we should simply not create it in the
         first place, or better create it but ignore it.

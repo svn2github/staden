@@ -26,12 +26,15 @@
 #define ED_DISP_YSCROLL		(1<<9)
 /* Sequence and consensus */
 #define ED_DISP_SEQS		(ED_DISP_READS | ED_DISP_CONS)
+/* Colouring changes - quality, cutoffs, etc */
+#define ED_DISP_COLOUR		(1<<13)
 /* Everything */
 #define ED_DISP_ALL		(ED_DISP_SEQS | ED_DISP_NAMES | \
 				 ED_DISP_XSCROLL | ED_DISP_YSCROLL | \
                                  ED_DISP_STATUS | \
 				 ED_DISP_RULER | ED_DISP_CURSOR | \
-				 ED_DISP_SELECTION | ED_DISP_HEIGHT)
+				 ED_DISP_SELECTION | ED_DISP_HEIGHT | \
+				 ED_DISP_COLOUR)
 /* Single items only - see xx->refresh_seq */
 #define ED_DISP_NAME		(1<<10)
 #define ED_DISP_SEQ		(1<<11)
@@ -47,6 +50,21 @@
 
 struct _EdLink;
 enum States {StateDown=0,StateUp};
+
+typedef struct {
+    struct _edview *xx;
+    int ncols;          // count of columns filled so far
+    int nrows;          // maximum number of rows
+    int *pos;           // X coordinates, one per ncols
+    int *nth;           // X coordinates, one per ncols
+    char **str;         // base strings, nrows*ncols
+    XawSheetInk **ink;  // ink strings, nrows*ncols
+    int *rec;           // record numbers (index into xx->r), nrows
+    int *rpos;          // +ve => starts that many bases in from left edge.
+                        // -ve => -1st visible base, size xx->nr
+    int *cigar_ind;	// Index into s->alignment CIGAR
+    int *cigar_len;	// Number of bases left for op at cigar_ind
+} edscreen_t;
 
 typedef struct _edview {
     /* A derived IO struct */
@@ -83,7 +101,9 @@ typedef struct _edview {
     int    cursor_type;
     tg_rec cursor_rec;
     int    cursor_pos;
+    int    cursor_nth;
     int    cursor_apos; /* absolute position in contig */
+    int    cursor_anth; /* nth base at abs pos */
     cursor_t *cursor;
     int reg_id; /* registration id */
 
@@ -105,6 +125,9 @@ typedef struct _edview {
     int r_start, r_end;
     /* FIXME: add cached index into r[] foreach row[y], as it's sorted on y */
 
+    /* Cached screen data, computed when X changes */
+    edscreen_t *screen;
+
     /* Maps r[i].anno.obj_rec to i */
     HacheTable *anno_hash;
 
@@ -114,8 +137,8 @@ typedef struct _edview {
     /* Selection */
     int    select_made;
     tg_rec select_seq;
-    int    select_start;
-    int    select_end;
+    int    select_start, select_start_nth;
+    int    select_end,   select_end_nth;
 } edview;
 
 typedef struct _EdLink {
@@ -162,14 +185,14 @@ char *edGetBriefTag(edview *xx, tg_rec anno_ele, char *format);
  * Formats reading information for the status line. This is done using a format
  * string where certain % rules are replaced by appropriate components.
  */
-char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format);
+char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, int nth, char *format);
 
 /*
  * Formats consensus information for the status line.
  * This is done using a format string where certain % rules are replaced by
  * appropriate components.
  */
-char *edGetBriefCon(edview *xx, tg_rec crec, int pos, char *format);
+char *edGetBriefCon(edview *xx, tg_rec crec, int pos, int nth, char *format);
 
 /*
  * Given an X,Y coordinate return the reading id under this position.
@@ -190,11 +213,12 @@ int edGetGelNumber(edview *xx, int x, int y);
  *         -1 on failure (eg numbers, off screen, etc)
  */
 int edview_item_at_pos(edview *xx, int row, int col, int name, int exact,
-		       int seq_only, tg_rec *rec, int *pos);
+		       int seq_only, tg_rec *rec, int *pos, int *nth);
 
 /* Cursor movement control */
 void edSetApos(edview *xx);
-int edSetCursorPos(edview *xx, int type, tg_rec rec, int pos, int visible);
+int edSetCursorPos(edview *xx, int type, tg_rec rec, int pos, int nth,
+		   int visible);
 int edCursorUp(edview *xx);
 int edCursorDown(edview *xx);
 int edCursorLeft(edview *xx);
@@ -257,9 +281,11 @@ int edview_visible_items(edview *xx, int start, int end);
  * X11 Selection handling
  */
 int edSelectClear(edview *xx);
-void edSelectFrom(edview *xx, int pos);
-void edSelectTo(edview *xx, int pos);
-void edSelectSet(edview *xx, tg_rec rec, int start, int end);
+void edSelectFrom(edview *xx, int pos, int nth);
+void edSelectTo(edview *xx, int pos, int nth);
+void edSelectSet(edview *xx, tg_rec rec,
+		 int start, int start_nth,
+		 int end, int end_nth);
 
 /*
  * Searching - see edview_search.c

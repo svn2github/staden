@@ -65,7 +65,9 @@ typedef struct {
 
 typedef struct {
     GCardinal start;
+    GCardinal start_nth;
     GCardinal end;
+    GCardinal end_nth;
     GCardinal mqual; /* mapping quality */
     tg_rec    rec; /* recno */
     tg_rec    pair_rec; /* paired end data */
@@ -216,7 +218,7 @@ typedef struct {
     Array anno;       /* Annotations; FIXME */
     char *name;       /* nul terminated name */
     char *trace_name; /* trace name; blank => same as name */
-    char *alignment;  /* alignment; blank => obvious guess from pads */
+    unsigned char *alignment;  /* alignment */
     char *seq;        /* sequence in ASCII format */
     char *conf;       /* 1 or 4 values per base depending on flags */
     char *sam_aux;    /* Auxillary records */
@@ -323,7 +325,9 @@ typedef struct index {
  */
 typedef struct {
     int start;
+    int start_nth;
     int end;
+    int end_nth;
     tg_rec rec;
     int mqual; /* Mapping qual */
     int comp;  /* complemented y/n */
@@ -346,7 +350,9 @@ typedef struct {
 /* This is binary compatible with the GRange type */
 typedef struct {
     int    start;
+    int    start_nth;
     int    end;
+    int    end_nth;
     int    mqual;
     tg_rec rec; /* or alternatively an index if range_t is free */
     tg_rec pair_rec;
@@ -467,5 +473,14 @@ typedef struct {
     char *name;
     char *data;
 } library_t;
+
+typedef struct {
+	double yz;   /* t->yzoom / 200.0 */
+	int ymin;
+	int ymax;
+	double wy0;
+	double wy1;
+} drawing_t;
+
 
 #endif /* _TG_STRUCT_H_ */

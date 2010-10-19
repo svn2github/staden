@@ -285,11 +285,11 @@ int main(int argc, char **argv) {
 #ifdef HAVE_SAMTOOLS
 	case 'b':
 	    printf("Processing BAM file %s\n", argv[optind]);
-	    err = parse_bam(io, argv[optind++], &a) ? 1 : 0;
+	    err = parse_unpadded_bam(io, argv[optind++], &a) ? 1 : 0;
 	    break;
 	case 's':	
 	    printf("Processing SAM file %s\n", argv[optind]);
-	    err = parse_sam(io, argv[optind++], &a) ? 1 : 0;
+	    err = parse_unpadded_sam(io, argv[optind++], &a) ? 1 : 0;
 	    break;
 #endif
 

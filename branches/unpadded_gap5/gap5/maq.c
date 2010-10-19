@@ -45,10 +45,10 @@ static int parse_maqmap_aux(tg_args *a,
     s->trace_name = s->name + s->name_len + 1;
     *s->trace_name = 0;
     s->trace_name_len = 0;
-    s->alignment = s->trace_name + s->trace_name_len + 1;
+    s->alignment = (unsigned char *)s->trace_name + s->trace_name_len + 1;
     *s->alignment = 0;
     s->alignment_len = 0;
-    s->seq = s->alignment + s->alignment_len+1;
+    s->seq = (char *)s->alignment + s->alignment_len+1;
     s->conf = s->seq+m->size;
     //s->mapping_qual = m->map_qual;
     s->mapping_qual = m->seq[m_sz-1];
@@ -239,8 +239,8 @@ int parse_maqmap(GapIO *io, char *dat_fn, tg_args *a) {
 	    
 	if (pair && !(m128.flag & PAIRFLAG_NOMATCH)) is_pair = 1;
 
-	save_range_sequence(io, &seq, seq.mapping_qual, pair, is_pair, tname,
-			    c, a, flags, lib);
+	save_range_sequence(io, &seq, 0, 0, seq.mapping_qual, pair, is_pair,
+			    tname, c, a, flags, lib);
 
 	if (((j+1) & 0xffff) == 0) {
 	    static struct timeval last, curr;

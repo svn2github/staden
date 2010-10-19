@@ -2,6 +2,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <X11/Xatom.h> /* XA_PRIMARY - included in Tk distribrution */
+#include <assert.h>
 
 #include "editor_view.h"
 #include "tkSheet.h"
@@ -12,9 +13,11 @@
 #include "tg_gio.h"
 #include "misc.h"
 #include "consensus.h"
+#include "pileup.h"
 #include "tagdb.h"
 #include "active_tags.h"
 #include "io_utils.h"
+#include "dna_utils.h"
 
 static void redisplaySelection(edview *xx);
 
@@ -86,6 +89,7 @@ edview *edview_new(GapIO *io, tg_rec contig, tg_rec crec, int cpos,
     xx->names_xPos = 0;
 
     xx->cursor_pos  = cpos;
+    xx->cursor_nth  = 0;
     xx->cursor_rec  = crec ? crec : contig;
     xx->cursor_type = (xx->cursor_rec == 0 || xx->cursor_rec == contig)
 	? GT_Contig : GT_Seq;
@@ -334,7 +338,7 @@ char *edGetBriefTag(edview *xx, tg_rec anno_ele, char *format) {
  * The special format %** is used to terminate decoding of the format if
  * the sequence is single-ended.
  */
-char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format) {
+char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, int nth, char *format) {
     static char status_buf[8192]; /* NB: no bounds checking! */
     int i, j, l1, l2, raw;
     char *cp;
@@ -451,11 +455,11 @@ char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format) {
 	    }
 	    break;
 
-	case 'b':
-	    if (pos >= 0 && pos < ABS(s->len)) {
-		char base[2];
-		int cut;
-		sequence_get_base(xx->io, &s, pos, &base[0], NULL, &cut, 1);
+	case 'b': {
+	    char base[2];
+	    int cut;
+	    if (0 == sequence_get_ubase(xx->io, &s, pos, nth,
+					&base[0], NULL, &cut)) {
 		base[1] = 0;
 		if (cut)
 		    base[0] = tolower(base[0]);
@@ -466,11 +470,11 @@ char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format) {
 		add_string(status_buf, &j, l1, l2, "-");
 	    }
 	    break;
-
-	case 'c':
-	    if (pos >= 0 && pos < ABS(s->len)) {
-		int q;
-		sequence_get_base(xx->io, &s, pos, NULL, &q, NULL, 1);
+	}
+	case 'c': {
+	    int q;
+	    if (0 == sequence_get_ubase(xx->io, &s, pos, nth,
+					NULL, &q, NULL)) {
 		if (raw) {
 		    add_double(status_buf, &j, l1, l2, 1 - pow(10, q/-10.0));
 		} else {
@@ -480,7 +484,7 @@ char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format) {
 		add_string(status_buf, &j, l1, l2, "-");
 	    }
 	    break;
-
+	}
 	case 'A':
 	    if (pos >= 0 && pos < ABS(s->len)) {
 		double q[4];
@@ -610,7 +614,7 @@ char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format) {
  * be displayed. This only works for some fields. Eg %Rp displays 0 to 4, but
  * %p displays, for instance, "forward universal"
  */
-char *edGetBriefCon(edview *xx, tg_rec crec, int pos, char *format) {
+char *edGetBriefCon(edview *xx, tg_rec crec, int pos, int nth, char *format) {
     static char status_buf[8192]; /* NB: no bounds checking! */
     int i, j, l1, l2, raw;
     char *cp;
@@ -788,6 +792,186 @@ char *edGetBriefCon(edview *xx, tg_rec crec, int pos, char *format) {
     return status_buf;
 }
 
+static int
+tk_redisplaySeqSequences_callback(void *cd, pileup_t *p, int pos, int nth) {
+    int i;
+    edscreen_t *c = (edscreen_t *)cd;
+    edview *xx = c->xx;
+
+    /* Abort once we're past the max column */
+    if (c->ncols >= xx->displayWidth+9)
+	return 1;
+
+    /* clear column */
+    for (i = 0; i < c->nrows; i++) {
+	c->str[i][c->ncols] = ' ';
+	c->ink[i][c->ncols].sh = sh_default;
+    }
+
+    /* Empty columns just get the previous coord */
+    if (!p && c->ncols) {
+	c->pos[c->ncols] = c->pos[c->ncols-1];
+	c->nth[c->ncols] = c->nth[c->ncols-1];
+    }
+
+    /* store data from pileup */
+    //printf("Pos %d/%d %p ", pos, nth, p);
+    for (; p; p = p->next) {
+	int row = p->r->y;
+	char *s;
+	XawSheetInk *i;
+
+	if (p->start) {
+	    int sp, sn, rp, rn;
+	    sequence_cigar2pos(xx->io, p->s, p->cigar_ind, p->cigar_len,
+			       &sp, &sn, &rp, &rn);
+	    /*
+	    printf("spos=%d/%d rpos=%d/%d\n",
+		   sp, sn, rp, rn);
+	    printf("%d/%d: New seq at row %d, ind %d, rec %"PRIrec
+		   " %d/%d %d%c %.10s\n",
+		   pos, nth, row, (int)(p->r - xx->r), p->r->rec,
+		   c->ncols, p->seq_offset, p->cigar_len, p->cigar_op,
+		   &p->s->seq[p->seq_offset]);
+	    */
+	    p->start = 0;
+	    c->rpos[(int)(p->r - xx->r)] = c->ncols ? c->ncols: -p->seq_offset;
+	    c->cigar_ind[(int)(p->r - xx->r)] = p->cigar_ind;
+	    c->cigar_len[(int)(p->r - xx->r)] = p->cigar_len;
+
+	    if (c->rec[row] == -1) {
+		/*
+		printf("Set c->rec[%d] = %d\n", 
+		       row, (int)(p->r - xx->r));
+		*/
+		c->rec[row] = (int)(p->r - xx->r);
+	    }
+	}
+
+	//putchar(p->base);
+	//printf("%d ", row);
+
+	s = &c->str[row][c->ncols];
+	i = &c->ink[row][c->ncols];
+	
+	*s = p->base;
+	c->pos[c->ncols] = pos;
+	c->nth[c->ncols] = nth;
+
+	/* Cutoffs */
+	if (p->sclip) {
+	    if (xx->ed->display_cutoffs) {
+		i->sh |= sh_light;
+	    } else {
+		*s = ' ';
+	    }
+	}
+
+	/* Quality values */
+	if (xx->ed->display_quality &&
+	    (p->sclip == 0 || xx->ed->display_cutoffs)) {
+	    int qbin = p->qual / 10;
+	    if (qbin < 0) qbin = 0;
+	    if (qbin > 9) qbin = 9;
+	    i->sh |= sh_bg;
+	    i->bg = xx->ed->qual_bg[qbin]->pixel;
+	}
+
+	/* Highlight disagreements */
+	if (xx->ed->display_differences &&
+	    (p->sclip == 0 || xx->ed->display_cutoffs)) {
+	    char ubase = xx->ed->display_differences_case
+		? p->base : toupper(p->base);
+
+	    switch (xx->ed->display_differences) {
+	    case 1:
+		if (ubase == xx->displayedConsensus[c->ncols])
+		    *s = '.';
+		else if (p->qual < xx->ed->display_differences_qual)
+		    *s = ':';
+		break;
+
+	    case 2:
+		if (ubase != xx->displayedConsensus[c->ncols]) {
+		    i->sh |= sh_fg;
+		    if (p->qual >= xx->ed->display_differences_qual)
+			i->fg = xx->ed->diff2_fg->pixel;
+		    else
+			i->fg = xx->ed->diff1_fg->pixel;
+		}
+		break;
+
+	    case 3:
+		if (ubase != xx->displayedConsensus[c->ncols]) {
+		    i->sh |= sh_bg;
+		    if (p->qual >= xx->ed->display_differences_qual)
+			i->bg = xx->ed->diff2_bg->pixel;
+		    else
+			i->bg = xx->ed->diff1_bg->pixel;
+		}
+		break;
+	    }
+	}
+    }
+    //putchar('\n');
+
+    c->ncols++;
+    return 0;
+}
+
+static edscreen_t *
+tk_redisplaySeqSequences_columns(edview *xx, rangec_t *r, int nr) {
+    int ret;
+    edscreen_t *c;
+    int i, j, k, max_y = -1;
+
+    /* Compute maximum Y dimension */
+    for (i = 0; i < nr; i++) {
+	if (max_y < xx->r[i].y)
+	    max_y = xx->r[i].y;
+    }
+    if (max_y < xx->displayHeight)
+	max_y = xx->displayHeight;
+    max_y++;
+
+    /* Allocate our screen cache */
+    c = malloc(sizeof(*c));
+    c->xx    = xx;
+    c->ncols = 0;
+    c->nrows = max_y;
+    c->pos   = malloc((xx->displayWidth+9) * sizeof(int));
+    c->nth   = calloc(xx->displayWidth+9, sizeof(int));
+    c->str   = malloc(max_y * (sizeof(char *) + xx->displayWidth + 9));
+    c->ink   = malloc((max_y * (sizeof(char *) + xx->displayWidth + 9))
+		      * sizeof(XawSheetInk));
+    c->rec   = malloc(max_y * sizeof(int));
+    c->rpos  = malloc(nr * sizeof(int));
+    c->cigar_ind = calloc(nr, sizeof(int));
+    c->cigar_len = calloc(nr, sizeof(int));
+    for (i = 0; i < xx->displayWidth+9; i++)
+	c->pos[i] = INT_MIN;
+
+    for (i = 0; i < max_y; i++) {
+	c->str[i] = (char *)(&c->str[max_y])        + i * (xx->displayWidth+9);
+	c->ink[i] = (XawSheetInk *)(&c->ink[max_y]) + i * (xx->displayWidth+9);
+	c->rec[i] = -1;
+    }
+    for (i = 0; i < nr; i++)
+	c->rpos[i] = INT_MAX;
+
+    ret = pileup_loop(xx->io, r, nr,
+		      xx->displayPos, 0,
+		      xx->displayPos + xx->displayWidth + 9, 0,
+		      tk_redisplaySeqSequences_callback, c);
+
+    if (ret) {
+	free(c);
+	return NULL;
+    }
+
+    return c;
+}
+
 /*
  * Populates the cache of visible items in xx->r and xx->nr.
  *
@@ -803,8 +987,11 @@ int edview_visible_items(edview *xx, int start, int end) {
     /* sort... */
     mode |= CSIR_SORT_BY_SEQ_TECH;
 
+    end += 9; /* So numbers always display correctly */
+
     /* Always reload for now as we can't spot edits yet */
-    if (xx->r && xx->r_start == start && xx->r_end == end)
+    if ((xx->refresh_flags & ED_DISP_COLOUR) == 0 &&
+	xx->r && xx->r_start == start && xx->r_end == end)
 	return 0;
 
     /* Query sequences */
@@ -864,6 +1051,33 @@ int edview_visible_items(edview *xx, int start, int end) {
 	hd.i = i;
 	HacheTableAdd(xx->anno_hash, (char *)&key, sizeof(key), hd, NULL);
     }
+
+    /*
+     * Force consensus to be up to date as tk_redisplaySeqSequences_columns
+     * makes use of this if we have highlight disagreements enabled
+     */
+    if (xx->ed->display_differences) {
+	calculate_consensus(xx->io, xx->cnum, xx->displayPos,
+			    xx->displayPos + xx->displayWidth - 1,
+			    xx->cachedConsensus);
+	for (i = 0; i < xx->displayWidth; i++) {
+	    xx->displayedConsensus[i] = "ACGT*N"[xx->cachedConsensus[i].call];
+	}
+    }
+
+    /* Update xx->screen cache. This holds data about sheet cells */
+    if (xx->screen) {
+	free(xx->screen->str);
+	free(xx->screen->ink);
+	free(xx->screen->pos);
+	free(xx->screen->nth);
+	free(xx->screen->rec);
+	free(xx->screen->rpos);
+	free(xx->screen->cigar_ind);
+	free(xx->screen->cigar_len);
+	free(xx->screen);
+    }
+    xx->screen = tk_redisplaySeqSequences_columns(xx, xx->r, xx->nr);
 
 #if 0
     puts("");
@@ -1010,6 +1224,8 @@ static void tk_redisplaySeqTags(edview *xx, XawSheetInk *ink, seq_t *s,
 				int sp, int left, int right) {
     char type[5];
     HacheItem *hi;
+    tg_rec key = s ? s->rec : xx->cnum;
+    int j;
 
     if (xx->ed->hide_annos)
 	return;
@@ -1017,67 +1233,41 @@ static void tk_redisplaySeqTags(edview *xx, XawSheetInk *ink, seq_t *s,
     if (xx->nr == 0)
 	return;
 
-    if (s) {
-	/* A sequence */
-	tg_rec key = s->rec;
-	int p, p2, l = s->len >= 0 ? s->len : -s->len;
-
-	if (l > xx->displayWidth - (sp-xx->displayPos))
-	    l = xx->displayWidth - (sp-xx->displayPos);
-
-	for (hi = HacheTableSearch(xx->anno_hash,
+    for (hi = HacheTableSearch(xx->anno_hash,
 			       (char *)&key, sizeof(key));
-	     hi; hi = HacheTableNext(hi, (char *)&key, sizeof(key))) {
-	    int ai = hi->data.i;
-	    int db = idToIndex(type2str(xx->r[ai].mqual, type));
+	 hi; hi = HacheTableNext(hi, (char *)&key, sizeof(key))) {
+	int ai = hi->data.i;
+	int db = idToIndex(type2str(xx->r[ai].mqual, type));
+	
+	printf("drawing tag %"PRIrec" %d+%d / %d+%d\n", xx->r[ai].rec,
+	       xx->r[ai].start, xx->r[ai].start_nth,
+	       xx->r[ai].end, xx->r[ai].end_nth);
 
-	    /* FIXME: Inefficient! */
-	    for (p2 = sp - xx->displayPos, p = 0; p<l; p++,p2++) {
-		if (p2 + xx->displayPos >= xx->r[ai].start &&
-		    p2 + xx->displayPos <= xx->r[ai].end) {
-		    if (xx->ed->display_cutoffs ||
-			(p >= left-1 && p <= right-1)) {
-			if (tag_db[db].fg_colour!=NULL) {
-			    ink[p2].sh|=sh_fg;
-			    ink[p2].fg=tag_db[db].fg_pixel;
-			}
-			if (tag_db[db].bg_colour!=NULL) {
-			    ink[p2].sh|=sh_bg;
-			    ink[p2].bg=tag_db[db].bg_pixel;
-			}
-		    }
-		}
-	    }
+
+	for (j = 0; j < xx->displayWidth; j++) {
+	    if (xx->screen->pos[j] > xx->r[ai].start ||
+		(xx->screen->pos[j] == xx->r[ai].start &&
+		 xx->screen->nth[j] >= xx->r[ai].start_nth))
+		break;
 	}
-    } else {
-	/* Consensus */
-	int j, p2;
-	tg_rec key = xx->cnum;
 
-	for (hi = HacheTableSearch(xx->anno_hash,
-			       (char *)&key, sizeof(key));
-	     hi; hi = HacheTableNext(hi, (char *)&key, sizeof(key))) {
-	    int ai = hi->data.i;
-	    int db = idToIndex(type2str(xx->r[ai].mqual, type));
-
-	    sp = xx->r[ai].start;
-	    if (sp < xx->displayPos)
-		sp = xx->displayPos;
-
-	    for (j = sp; j <= xx->r[ai].end; j++) {
-		if (j >= xx->displayPos + xx->displayWidth)
-		    break;
-
-		p2 = j-xx->displayPos;
-		if (tag_db[db].fg_colour!=NULL) {
-		    ink[p2].sh|=sh_fg;
-		    ink[p2].fg=tag_db[db].fg_pixel;
-		}
-		if (tag_db[db].bg_colour!=NULL) {
-		    ink[p2].sh|=sh_bg;
-		    ink[p2].bg=tag_db[db].bg_pixel;
-		}
+	while (j < xx->displayWidth &&
+	       xx->screen->pos[j] <= xx->r[ai].end &&
+	       xx->screen->pos[j] != INT_MIN) {
+	    if (tag_db[db].fg_colour!=NULL) {
+		ink[j].sh|=sh_fg;
+		ink[j].fg=tag_db[db].fg_pixel;
 	    }
+	    if (tag_db[db].bg_colour!=NULL) {
+		ink[j].sh|=sh_bg;
+		ink[j].bg=tag_db[db].bg_pixel;
+	    }
+		
+	    if (xx->screen->pos[j] == xx->r[ai].end &&
+		xx->screen->nth[j] >= xx->r[ai].end_nth)
+		break;
+
+	    j++;
 	}
     }
 }
@@ -1093,7 +1283,9 @@ static int seq_in_readings_list(edview *xx, tg_rec rec) {
 }
 
 static void tk_redisplaySeqSequences(edview *xx, rangec_t *r, int nr) {
-    int i, j, k, box_alt;
+    int i, j, k, box_alt, seq_len;
+
+    puts("");
 
     /*
     sheet_clear(&xx->ed->sw);
@@ -1194,82 +1386,15 @@ static void tk_redisplaySeqSequences(edview *xx, rangec_t *r, int nr) {
 	    if (xx->refresh_flags & (ED_DISP_READS | ED_DISP_SEQ)) {
 		int p, p2;
 
-		for (p2 = sp - xx->displayPos, p = 0; p < l; p++, p2++) {
-		    char base;
-		    int qual;
-
-		    if (p+seq_p >= 0 && p+seq_p < ABS(s->len)) {
-			sequence_get_base(xx->io, &s, p+seq_p, &base, &qual,
-					  NULL, 0);
-			//ink[p2].sh &= ~sh_bg;
-		    } else {
-			base = ' ';
-			qual = 0;
-		    }
-		    line[p2] = base;
-		
-		    /* Cutoffs */
-		    if (p < left-1 || p > right-1) {
-			if (xx->ed->display_cutoffs) {
-			    ink[p2].sh |= sh_light;
-			    //seq[p+seq_p] = tolower(seq[p+seq_p]);
-			} else {
-			    line[p2] = ' ';
-			}
-		    }
-
-		    /* Quality values */
-		    if (xx->ed->display_cutoffs ||
-			(p >= left-1 && p <= right-1)) {
-			if (xx->ed->display_quality) {
-			    int qbin = qual / 10;
-			    if (qbin < 0) qbin = 0;
-			    if (qbin > 9) qbin = 9;
-			    ink[p2].sh |= sh_bg;
-			    ink[p2].bg = xx->ed->qual_bg[qbin]->pixel;
-			}
-		    }
-
-		    /* Highlight disagreements */
-		    if (xx->ed->display_differences && line[p2] != ' ') {
-			char ubase = xx->ed->display_differences_case
-			    ? base
-			    : toupper(base);
-			switch (xx->ed->display_differences) {
-			case 1:
-			    if (ubase == xx->displayedConsensus[p2])
-				line[p2] = '.';
-			    else if (qual < xx->ed->display_differences_qual)
-				line[p2] = ':';
-			    break;
-
-			case 2:
-			    if (ubase != xx->displayedConsensus[p2]) {
-				ink[p2].sh |= sh_fg;
-				if (qual >= xx->ed->display_differences_qual)
-				    ink[p2].fg = xx->ed->diff2_fg->pixel;
-				else
-				    ink[p2].fg = xx->ed->diff1_fg->pixel;
-			    }
-			    break;
-
-			case 3:
-			    if (ubase != xx->displayedConsensus[p2]) {
-				ink[p2].sh |= sh_bg;
-				if (qual >= xx->ed->display_differences_qual)
-				    ink[p2].bg = xx->ed->diff2_bg->pixel;
-				else
-				    ink[p2].bg = xx->ed->diff1_bg->pixel;
-			    }
-			    break;
-			}
-		    }
-		}
-
 		/* Annotations */
 		if (xx->anno_hash) {
-		    tk_redisplaySeqTags(xx, ink, s, sp, left, right);
+		    tk_redisplaySeqTags(xx, xx->screen->ink[xx->r[i].y],
+					s, sp, left, right);
 		}
+
+		memcpy(line, xx->screen->str[xx->r[i].y], xx->displayWidth);
+		memcpy(ink,  xx->screen->ink[xx->r[i].y],
+		       xx->displayWidth * sizeof(XawSheetInk));
 	    }
 
 	    /* Name */
@@ -1403,7 +1528,7 @@ static void tk_redisplaySeqSequences(edview *xx, rangec_t *r, int nr) {
 }
 
 
-static void tk_redisplaySeqConsensus(edview *xx, rangec_t *r, int nr) {
+static void tk_redisplaySeqConsensus(edview *xx) {
     int pos = xx->displayPos;
     int wid =  xx->displayWidth;
     char name[] = " Consensus";
@@ -1413,13 +1538,16 @@ static void tk_redisplaySeqConsensus(edview *xx, rangec_t *r, int nr) {
     /* Names panel */
     XawSheetPutText(&xx->names->sw, 0, xx->y_cons, strlen(name), name);
 
-    /* Editor panel */
-
-    calculate_consensus(xx->io, xx->cnum, pos, pos+wid-1, xx->cachedConsensus);
-    for (i = 0; i < wid; i++) {
-	xx->displayedConsensus[i] = "ACGT*N"[xx->cachedConsensus[i].call];
+    /* Maybe already computed in edview_visible_items */
+    if (!xx->ed->display_differences) {
+	calculate_consensus(xx->io, xx->cnum, pos, pos+wid-1,
+			    xx->cachedConsensus);
+	for (i = 0; i < wid; i++) {
+	    xx->displayedConsensus[i] = "ACGT*N"[xx->cachedConsensus[i].call];
+	}
     }
 
+    /* Editor panel */
     memset(ink, 0, MAX_DISPLAY_WIDTH * sizeof(*ink));
     if (xx->ed->display_quality) {
 	int qbin;
@@ -1479,6 +1607,7 @@ static int generate_ruler(edview *xx, char *ruler, int pos, int width) {
     //int padded_pos[MAX_DISPLAY_WIDTH+21];
 
     memset(ruler, ' ', MAX_DISPLAY_WIDTH+21);
+
 #if 0
     if (DBI(xx)->reference_seq) {
 	/* Number relative to a specific sequence number */
@@ -1569,6 +1698,9 @@ static int generate_ruler(edview *xx, char *ruler, int pos, int width) {
 	return 9;
     } /* else */
 #endif
+
+    /* Old padded numbering */
+#if 0
     {
 	/* Basic numbering */
 	int lower,times;
@@ -1579,6 +1711,27 @@ static int generate_ruler(edview *xx, char *ruler, int pos, int width) {
 	return 9+pos%10;
 	
     }
+#endif
+
+    /* Unpadded data array, precomputed to xx->screen */
+    if (xx->screen) {
+	int last = INT_MAX;
+
+	for (j = 0; j < xx->displayWidth+9; j++, k++) {
+	    if (xx->screen->pos[j] == INT_MIN)
+		continue;
+	       
+	    if (xx->screen->pos[j] != last && (xx->screen->pos[j]%10) == 0) {
+		sprintf(k, "%10d", xx->screen->pos[j]);
+		k[10] = ' ';
+	    }
+	    last = xx->screen->pos[j];
+	}
+
+	return 9;
+    }
+
+    return 0;
 }
 
 static void tk_redisplaySeqNumbers(edview *xx) {
@@ -1587,7 +1740,7 @@ static void tk_redisplaySeqNumbers(edview *xx) {
 
     off = generate_ruler(xx, ruler, xx->displayPos, xx->displayWidth);
     XawSheetPutText(&xx->ed->sw, 0, xx->y_numbers, xx->displayWidth,
-		    &ruler[off]);
+			 &ruler[off]);
 }
 
 
@@ -1642,9 +1795,21 @@ static void tk_redisplayCursor(edview *xx, rangec_t *r, int nr) {
 	}
     }
 
-    x = xx->cursor_apos - xx->displayPos;
-    XawSheetDisplayCursor(&xx->ed->sw, True);
-    XawSheetPositionCursor(&xx->ed->sw, x, y);
+    //x = xx->cursor_apos - xx->displayPos;
+    //XawSheetDisplayCursor(&xx->ed->sw, True);
+    //XawSheetPositionCursor(&xx->ed->sw, x, y);
+
+    if (xx->screen) {
+	int i;
+	for (i = 0; i < xx->displayWidth; i++) {
+	    if (xx->screen->pos[i] == xx->cursor_apos) {
+		XawSheetDisplayCursor(&xx->ed->sw, True);
+		XawSheetPositionCursor(&xx->ed->sw, i+xx->cursor_anth, y);
+		return;
+	    }
+	}
+    }
+    XawSheetDisplayCursor(&xx->ed->sw, False);
 }
 
 
@@ -1663,13 +1828,19 @@ int showCursor(edview *xx, int x_safe, int y_safe) {
 
     /* X position */
     if (!x_safe) {
-	int w = xx->displayWidth > 10 ? 10 : xx->displayWidth;
-	if (xx->cursor_apos < xx->displayPos) {
-	    set_displayPos(xx, xx->cursor_apos + 1 - w);
-	    do_x = 1;
-	}
-	if (xx->cursor_apos >= xx->displayPos + xx->displayWidth) {
-	    set_displayPos(xx, xx->cursor_apos - xx->displayWidth + w);
+	if (xx->screen) {
+	    int w = xx->displayWidth > 10 ? 10 : xx->displayWidth;
+	    if (xx->cursor_apos < xx->screen->pos[0]) {
+		set_displayPos(xx, xx->cursor_apos -w);
+		do_x = 1;
+	    }
+	    if (xx->cursor_apos > xx->screen->pos[xx->displayWidth-1] ||
+		(xx->cursor_apos == xx->screen->pos[xx->displayWidth-1] &&
+		 xx->cursor_anth > xx->screen->nth[xx->displayWidth-1])) {
+		set_displayPos(xx, xx->cursor_apos - w);
+		do_x = 1;
+	    }
+	} else {
 	    do_x = 1;
 	}
     }
@@ -1746,7 +1917,9 @@ static void cursor_notify(edview *xx) {
 
     xx->cursor->seq = xx->cursor_rec;
     xx->cursor->pos = xx->cursor_pos;
+    xx->cursor->nth = xx->cursor_nth;
     xx->cursor->abspos = xx->cursor_apos;
+    //xx->cursor->absnth = xx->cursor_anth;
     xx->cursor->job = CURSOR_MOVE;
     xx->cursor->sent_by = xx->reg_id;
     cn.job = REG_CURSOR_NOTIFY;
@@ -1855,9 +2028,9 @@ int set_displayPos(edview *xx, int pos) {
 	vis_cur = edview_seq_visible(xx, xx->cursor_rec, NULL);
 
 	edview_item_at_pos(xx, xx->y_seq_start,
-			   0, 0, 0, 1, &vis_rec1, &vis_pos);
+			   0, 0, 0, 1, &vis_rec1, &vis_pos, NULL);
 	edview_item_at_pos(xx, xx->displayHeight - xx->y_seq_end - 1,
-			   0, 0, 0, 1, &vis_rec2, &vis_pos);
+			   0, 0, 0, 1, &vis_rec2, &vis_pos, NULL);
 	    
 	xx->displayPos += delta;
 
@@ -1925,12 +2098,18 @@ int set_displayPos(edview *xx, int pos) {
 
 /*
  * Resets the absolute position in the contig based on the contents of the
- * cursor_pos and cursor_rec fields.
+ * cursor_pos, cursor_nth and cursor_rec fields.
+ *
+ * cursor_pos/nth are the unpadded position and nth base at position in
+ * either the consensus, sequence or anno. The only adjustment needed to make
+ * this an absolute coordinate is to add the starting point for the data
+ * item.
  */
 void edSetApos(edview *xx) {
     switch (xx->cursor_type) {
     case GT_Contig:
 	xx->cursor_apos = xx->cursor_pos;
+	xx->cursor_anth = xx->cursor_nth;
 	break;
 
     case GT_Seq: {
@@ -1939,6 +2118,7 @@ void edSetApos(edview *xx) {
 	sequence_get_position(xx->io, xx->cursor_rec, &cnum, &cpos, NULL,
 			      NULL);
 	xx->cursor_apos = cpos + xx->cursor_pos;
+	xx->cursor_anth = xx->cursor_nth;
 	break;
     }
 
@@ -1946,6 +2126,7 @@ void edSetApos(edview *xx) {
 	tg_rec cnum;
 	range_t *r = anno_get_range(xx->io, xx->cursor_rec, &cnum, 0);
 	xx->cursor_apos = r->start + xx->cursor_pos;
+	xx->cursor_anth = xx->cursor_nth;
 	break;
     }
 
@@ -1958,7 +2139,8 @@ void edSetApos(edview *xx) {
     cursor_notify(xx);
 }
 
-int edSetCursorPos(edview *xx, int type, tg_rec rec, int pos, int visible) {
+int edSetCursorPos(edview *xx, int type, tg_rec rec, int pos, int nth,
+		   int visible) {
     if (!xx)
 	return 0;
 
@@ -1966,29 +2148,23 @@ int edSetCursorPos(edview *xx, int type, tg_rec rec, int pos, int visible) {
 	seq_t *s = get_seq(xx->io, rec);
 	int left = s->left-1;
 	int right = s->right;
+	int ulen = sequence_unpadded_len(s, NULL);
 
 	if (xx->ed->display_cutoffs) {
 	    left = 0;
-	    right = ABS(s->len);
+	    right = sequence_unpadded_len(s, NULL);
 	} else {
 	    if (sequence_get_orient(xx->io, rec)) {
 		s = get_seq(xx->io, rec);
-		left  = ABS(s->len) - (s->right-1) -1;
-		right = ABS(s->len) - (s->left-1);
+		left  = ulen - (s->right-1) -1;
+		right = ulen - (s->left-1);
 	    }
 	}
 
 	/* If out of bounds, punt it to the consensus */
 	if (pos < left || pos > right) {
 	    if (visible) {
-		/*
-		int cpos;
-		sequence_get_position(xx->io, rec, NULL, &cpos, NULL, NULL);
-		type = GT_Contig;
-		pos += cpos;
-		rec = xx->contig->rec;
-		*/
-		if (pos < 0 || pos > ABS(s->len))
+		if (pos < 0 || pos > sequence_unpadded_len(s, NULL))
 		    return 0;
 		xx->ed->display_cutoffs = 1;
 	    } else {
@@ -2025,6 +2201,7 @@ int edSetCursorPos(edview *xx, int type, tg_rec rec, int pos, int visible) {
     xx->cursor_type = type;
     xx->cursor_rec  = rec;
     xx->cursor_pos  = pos;
+    xx->cursor_nth  = nth;
 
     edSetApos(xx);
 
@@ -2127,9 +2304,11 @@ int edCursorUp(edview *xx) {
 		int left = s->left;
 		int right = s->right;
 		if (sequence_get_orient(xx->io, xx->r[j].rec)) {
+		    int ulen;
 		    s = get_seq(xx->io, xx->r[j].rec);
-		    left  = ABS(s->len) - (s->right-1);
-		    right = ABS(s->len) - (s->left-1);
+		    ulen = sequence_unpadded_len(s, NULL);
+		    left  = ulen - (s->right-1);
+		    right = ulen - (s->left-1);
 		}
 		if (cpos - xx->r[j].start < left-1 ||
 		    cpos - xx->r[j].start > right)
@@ -2197,9 +2376,11 @@ int edCursorDown(edview *xx) {
 		int left = s->left;
 		int right = s->right;
 		if (sequence_get_orient(xx->io, xx->r[j].rec)) {
+		    int ulen;
 		    s = get_seq(xx->io, xx->r[j].rec);
-		    left  = ABS(s->len) - (s->right-1);
-		    right = ABS(s->len) - (s->left-1);
+		    ulen = sequence_unpadded_len(s, NULL);
+		    left  = ulen - (s->right-1);
+		    right = ulen - (s->left-1);
 		}
 		if (cpos - xx->r[j].start < left-1 ||
 		    cpos - xx->r[j].start > right)
@@ -2229,11 +2410,25 @@ int edCursorDown(edview *xx) {
 }
 
 int edCursorLeft(edview *xx) {
+    int i, pd = -1, nd = -xx->cursor_anth;
+    for (i = 1; i < xx->displayWidth; i++) {
+	if (xx->screen->pos[i] == xx->cursor_apos &&
+	    xx->screen->nth[i] == xx->cursor_anth) {
+	    pd = xx->screen->pos[i-1] - xx->cursor_apos;
+	    nd = xx->screen->nth[i-1] - xx->cursor_anth;
+	    break;
+	}
+    }
+
     if (xx->cursor_type == GT_Seq) {
 	if (xx->ed->display_cutoffs) {
-	    if (xx->cursor_pos > 0) {
-		xx->cursor_pos--;
-		xx->cursor_apos--;
+	    if (xx->cursor_pos > 0 || xx->cursor_nth > 0) {
+		//xx->cursor_pos--;
+		//xx->cursor_apos--;
+		xx->cursor_apos += pd;
+		xx->cursor_anth += nd;
+		xx->cursor_pos  += pd;
+		xx->cursor_nth  += nd;
 	    }
 	} else {
 	    seq_t *s = get_seq(xx->io, xx->cursor_rec);
@@ -2241,18 +2436,26 @@ int edCursorLeft(edview *xx) {
 
 	    if (sequence_get_orient(xx->io, xx->cursor_rec)) {
 		s = get_seq(xx->io, xx->cursor_rec);
-		left = ABS(s->len) - (s->right-1);
+		left = sequence_unpadded_len(s, NULL) - (s->right-1);
 	    }
 
-	    if (xx->cursor_pos >= left) {
-		xx->cursor_pos--;
-		xx->cursor_apos--;
+	    if (xx->cursor_pos >= left || xx->cursor_nth > 0) {
+		//xx->cursor_pos--;
+		//xx->cursor_apos--;
+		xx->cursor_apos += pd;
+		xx->cursor_anth += nd;
+		xx->cursor_pos  += pd;
+		xx->cursor_nth  += nd;
 	    }
 
 	}
     } else {
-	xx->cursor_pos--;
-	xx->cursor_apos--;
+	//xx->cursor_pos--;
+	//xx->cursor_apos--;
+	xx->cursor_apos += pd;
+	xx->cursor_anth += nd;
+	xx->cursor_pos  += pd;
+	xx->cursor_nth  += nd;
     }
 
     cursor_notify(xx);
@@ -2265,30 +2468,52 @@ int edCursorLeft(edview *xx) {
 }
 
 int edCursorRight(edview *xx) {
+    int i, pd = 1, nd = -xx->cursor_anth;
+    for (i = 0; i < xx->displayWidth; i++) {
+	if (xx->screen->pos[i] == xx->cursor_apos &&
+	    xx->screen->nth[i] == xx->cursor_anth) {
+	    pd = xx->screen->pos[i+1] - xx->cursor_apos;
+	    nd = xx->screen->nth[i+1] - xx->cursor_anth;
+	    break;
+	}
+    }
+
     if (xx->cursor_type == GT_Seq) {
 	seq_t *s = get_seq(xx->io, xx->cursor_rec);
 
 	if (xx->ed->display_cutoffs) {
-	    if (xx->cursor_pos < ABS(s->len)) {
-		xx->cursor_pos++;
-		xx->cursor_apos++;
+	    if (xx->cursor_pos < sequence_unpadded_len(s, NULL)) {
+		//xx->cursor_pos++;
+		//xx->cursor_apos++;
+		xx->cursor_apos += pd;
+		xx->cursor_anth += nd;
+		xx->cursor_pos  += pd;
+		xx->cursor_nth  += nd;
 	    }
 	} else {
 	    int right = s->right;
 
 	    if (sequence_get_orient(xx->io, xx->cursor_rec)) {
 		s = get_seq(xx->io, xx->cursor_rec);
-		right = ABS(s->len) - (s->left-1);
+		right = sequence_unpadded_len(s, NULL) - (s->left-1);
 	    }
 
 	    if (xx->cursor_pos < right) {
-		xx->cursor_pos++;
-		xx->cursor_apos++;
+		//xx->cursor_pos++;
+		//xx->cursor_apos++;
+		xx->cursor_apos += pd;
+		xx->cursor_anth += nd;
+		xx->cursor_pos  += pd;
+		xx->cursor_nth  += nd;
 	    }
 	}
     } else {
-	xx->cursor_pos++;
-	xx->cursor_apos++;
+	//xx->cursor_pos++;
+	//xx->cursor_apos++;
+	xx->cursor_apos += pd;
+	xx->cursor_anth += nd;
+	xx->cursor_pos  += pd;
+	xx->cursor_nth  += nd;
     }
 
     cursor_notify(xx);
@@ -2301,6 +2526,8 @@ int edCursorRight(edview *xx) {
 }
 
 int edReadStart(edview *xx) {
+    xx->cursor_nth = 0;
+
     if (xx->ed->display_cutoffs) {
 	if (xx->cursor_type == GT_Seq) {
 	    xx->cursor_pos = 0;
@@ -2312,10 +2539,12 @@ int edReadStart(edview *xx) {
 	    seq_t *s = get_seq(xx->io, xx->cursor_rec);
 
 	    xx->cursor_pos = s->left-1;
+	    xx->cursor_nth = 0;
 
 	    if (sequence_get_orient(xx->io, xx->cursor_rec)) {
 		s = get_seq(xx->io, xx->cursor_rec);
-		xx->cursor_pos = ABS(s->len) - (s->right-1) - 1;
+		xx->cursor_pos = sequence_unpadded_len(s, NULL)
+		    - (s->right-1) - 1;
 	    }
 	} else {
 	    int ustart, uend;
@@ -2340,10 +2569,12 @@ int edReadStart2(edview *xx) {
 }
 
 int edReadEnd(edview *xx) {
+    xx->cursor_nth = 0;
+
     if (xx->ed->display_cutoffs) {
 	if (xx->cursor_type == GT_Seq) {
 	    seq_t *s = get_seq(xx->io, xx->cursor_rec);
-	    xx->cursor_pos = ABS(s->len);
+	    xx->cursor_pos = sequence_unpadded_len(s, NULL);
 	} else {
 	    xx->cursor_pos = xx->contig->end;
 	}
@@ -2355,7 +2586,7 @@ int edReadEnd(edview *xx) {
 
 	    if (sequence_get_orient(xx->io, xx->cursor_rec)) {
 		s = get_seq(xx->io, xx->cursor_rec);
-		xx->cursor_pos = ABS(s->len) - (s->left-1);
+		xx->cursor_pos = sequence_unpadded_len(s, NULL) - (s->left-1);
 	    }
 	} else {
 	    int ustart, uend;
@@ -2381,6 +2612,7 @@ int edReadEnd2(edview *xx) {
 
 int edContigStart(edview *xx) {
     xx->cursor_pos = xx->contig->start;
+    xx->cursor_nth = 0;
     xx->cursor_type = GT_Contig;
     xx->cursor_rec = xx->cnum;
     xx->cursor_apos = xx->cursor_pos;
@@ -2396,6 +2628,7 @@ int edContigStart(edview *xx) {
 
 int edContigEnd(edview *xx) {
     xx->cursor_pos = xx->contig->end;
+    xx->cursor_nth = 0;
     xx->cursor_type = GT_Contig;
     xx->cursor_rec = xx->cnum;
     xx->cursor_apos = xx->cursor_pos;
@@ -2443,8 +2676,8 @@ int edview_redraw(edview *xx) {
     //tk_redisplaySeqEditStatus(xx);
 
     /* Redraw the consensus and/or numbers */
-    if (xx->refresh_flags & ED_DISP_CONS) {
-	tk_redisplaySeqConsensus(xx, xx->r, xx->nr);
+    if (xx->refresh_flags & (ED_DISP_CONS | ED_DISP_XSCROLL)) {
+	tk_redisplaySeqConsensus(xx);
     }
     if (xx->refresh_flags & ED_DISP_RULER) {
 	tk_redisplaySeqNumbers(xx);
@@ -2501,7 +2734,7 @@ int edview_redraw(edview *xx) {
  *         -1 on failure (eg numbers, off screen, etc)
  */
 int edview_item_at_pos(edview *xx, int row, int col, int name, int exact,
-		       int seq_only, tg_rec *rec, int *pos) {
+		       int seq_only, tg_rec *rec, int *pos, int *nth) {
     int i;
     int type = -1;
     int best_delta = INT_MAX;
@@ -2510,11 +2743,65 @@ int edview_item_at_pos(edview *xx, int row, int col, int name, int exact,
 
     if (rec) *rec = -1;
     if (pos) *pos =  0;
+    if (nth) *nth =  0;
+
+    if (!xx->screen)
+	return -1;
+
+    if (row >= xx->y_seq_start) { 
+	int row2 = row + xx->displayYPos - xx->y_seq_start;
+	int rid = xx->screen->rec[row2];
+	int sid = -1;
+
+	//printf("rid = %d\n", rid);
+	for (; rid >= 0 && rid < xx->nr && xx->r[rid].y == row2; rid++) {
+	    //printf("Check #%"PRIrec"\n", xx->r[rid].rec);
+	    if (col >= xx->screen->rpos[rid])
+		sid = rid;
+	}
+	if (sid == -1)
+	    return -1;
+
+	//printf("Row %d Col %d Seq = %d/%"PRIrec" start %d\n",
+	//       row, col, sid, xx->r[sid].rec, xx->screen->rpos[sid]);
+
+	if (rec)
+	    *rec = xx->r[sid].rec;
+	if (pos) {
+	    if (xx->screen->rpos[sid] < 0) {
+		int sp, sn, rp, rn;
+		seq_t *s = cache_search(xx->io, GT_Seq, xx->r[sid].rec);
+
+		//int upos, nth;
+		//sequence_get_upos(xx->io, &s, -xx->screen->rpos[sid],
+		//		  &upos, &nth);
+		//*pos = upos + xx->screen->pos[col] - xx->screen->pos[0];
+
+		// Try 2
+		sequence_cigar2pos(xx->io, s,
+				   xx->screen->cigar_ind[sid],
+				   xx->screen->cigar_len[sid],
+				   &sp, &sn, &rp, &rn);
+		sp--;
+		rp--;
+		*pos = rp + xx->screen->pos[col] - xx->screen->pos[0];
+		
+	    } else {
+		*pos = 
+		    xx->screen->pos[col] - xx->screen->pos[xx->screen->rpos[sid]];
+	    }
+	}
+	if (nth)
+	    *nth = xx->screen->nth[col];
+
+	return GT_Seq;
+    }
 
     /* Special case - the reserve row numbers */
     if (row == xx->y_cons) {
 	*rec = xx->cnum;
-	*pos = col + xx->displayPos;
+	*pos = xx->screen->pos[col];
+	*nth = xx->screen->nth[col];
 	type = GT_Contig;
 
 	if (xx->ed->hide_annos || seq_only)
@@ -2541,7 +2828,9 @@ int edview_item_at_pos(edview *xx, int row, int col, int name, int exact,
 
     if (row < xx->y_seq_start)
 	return -1;
-    
+
+    return -1;
+#if 0    
     /* A sequence, so find out what's visible */
     edview_visible_items(xx, xx->displayPos,
 			 xx->displayPos + xx->displayWidth);
@@ -2614,6 +2903,7 @@ int edview_item_at_pos(edview *xx, int row, int col, int name, int exact,
     }
 
     return !exact || best_delta == 0 ? type : -1;
+#endif
 }
 
 /*
@@ -2737,22 +3027,94 @@ tg_rec *edGetTemplateReads(edview *xx, tg_rec seqrec, int *nrec) {
 /*
  * (Un)draws the selection - toggles it on or off
  */
-static void toggle_select(edview *xx, tg_rec seq, int from_pos, int to_pos) {
+static void toggle_select(edview *xx, tg_rec seq,
+			  int from_pos, int from_nth,
+			  int to_pos, int to_nth) {
     int row, xmin, xmax;
 
-    if (from_pos > to_pos) {
-	int temp = from_pos;
-	from_pos = to_pos;
-	to_pos = temp;
+    if (from_pos > to_pos || (from_pos == to_pos && from_nth > to_nth)) {
+	int temp;
+	temp = from_pos; from_pos = to_pos; to_pos = temp;
+	temp = from_nth; from_nth = to_nth; to_nth = temp;
     }
 
     /* Find out the X and Y coord, and exit now if it's not visible */
     if (-1 == (row = edview_row_for_item(xx, seq, &xmin, NULL)))
 	return;
+
+    if (from_pos < 0) {from_pos = 0; from_nth = 0;}
+    if (to_pos   < 0) {to_pos   = 0; to_nth   = 0;}
+
+    if (seq != xx->cnum) {
+	HacheItem *hi;
+	int i, p;
+	tg_rec cnum;
+	int cpos, orient;
+	sequence_get_position(xx->io, seq, &cnum, &cpos, NULL, &orient);
+
+	from_pos += cpos;
+	to_pos += cpos;
+
+	if (!(hi = HacheTableSearch(xx->rec_hash, (char *)&seq, sizeof(seq))))
+	    return;
+	assert(xx->r[hi->data.i].rec == seq);
+	i = hi->data.i;
+
+	/* xmin */
+	p = xx->screen->rpos[i];
+	if (p < 0) p = 0;
+
+	while (p < xx->displayWidth) {
+	    int p2 = xx->screen->pos[p];
+	    if (p2 > from_pos) {
+		/* Off left edge => xmin=0 */
+		break;
+	    }
+	    if (p2 == from_pos && xx->screen->nth[p] == from_nth)
+		break;
+	    p++;
+	}
+	xmin = p;
+
+	/* xmax */
+	while (p < xx->displayWidth) {
+	    int p2 = xx->screen->pos[p];
+	    if (p2 > to_pos) {
+		/* Off left edge => entirely invisible */
+		return;
+	    }
+	    if (p2 == to_pos && xx->screen->nth[p] == to_nth)
+		break;
+	    p++;
+	}
+	xmax = p;
+    } else {
+	/* Consensus is selected */
+	int p;
+
+	xmin = 0; xmax = xx->displayWidth-1;
+	for (p = 0; p < xx->displayWidth; p++) {
+	    int p2 = xx->screen->pos[p];
+	    if (p2 > from_pos)
+		break;
+	    if (p2 == from_pos && xx->screen->nth[p] == from_nth)
+		break;
+	}
+	xmin = p;
+
+	for (; p < xx->displayWidth; p++) {
+	    int p2 = xx->screen->pos[p];
+	    if (p2 > to_pos)
+		return; /* off left edge */
+	    if (p2 == to_pos && xx->screen->nth[p] == to_nth)
+		break;
+	}
+	xmax = p;
+    }
     
     /* Convert xmin/xmax to the region we wish to view */
-    xmin += from_pos;
-    xmax = xmin + to_pos - from_pos;
+    //    xmin += from_pos;
+    //    xmax = xmin + to_pos - from_pos;
 
     /* clip to screen */
     if (xmin < 0) xmin = 0;
@@ -2767,7 +3129,9 @@ static void toggle_select(edview *xx, tg_rec seq, int from_pos, int to_pos) {
 }
 
 void redisplaySelection(edview *xx) {
-    toggle_select(xx, xx->select_seq, xx->select_start, xx->select_end);
+    toggle_select(xx, xx->select_seq,
+		  xx->select_start, xx->select_start_nth,
+		  xx->select_end,   xx->select_end_nth);
 }
 
 /*
@@ -2782,7 +3146,9 @@ static void edSelectionLost(ClientData cd) {
     xx->select_made = 0;
     xx->select_seq = 0;
     xx->select_start = 0;
+    xx->select_start_nth = 0;
     xx->select_end = 0;
+    xx->select_end_nth = 0;
 }
 
 int edSelectClear(edview *xx) {
@@ -2793,7 +3159,7 @@ int edSelectClear(edview *xx) {
     return 0;
 }
 
-void edSelectFrom(edview *xx, int pos) {
+void edSelectFrom(edview *xx, int pos, int nth) {
     /* Undisplay an old selection */
     if (xx->select_made)
 	redisplaySelection(xx);
@@ -2802,8 +3168,48 @@ void edSelectFrom(edview *xx, int pos) {
 
     /* Set start/end */
     xx->select_seq = xx->cursor_rec;
-    pos += xx->displayPos;
     if (xx->select_seq != xx->cnum) {
+ 	tg_rec cnum;
+	tg_rec key;
+	HacheItem *hi;
+	int i, p;
+	
+	key = xx->cursor_rec;
+	if (!xx->rec_hash || !xx->r)
+	    return;
+
+	if (!(hi = HacheTableSearch(xx->rec_hash, (char *)&key, sizeof(key))))
+	    return;
+	assert(xx->r[hi->data.i].rec == xx->cursor_rec);
+
+	i = hi->data.i;
+	if ((p = xx->screen->rpos[i]) >= 0) {
+	    /* p chars in from the left screen edge */
+	    xx->select_start     = xx->screen->pos[pos] - xx->screen->pos[p];
+	    xx->select_start_nth = xx->screen->nth[pos] - xx->screen->nth[p];
+	} else {
+	    /* -p bases into the raw sequence */
+	    int sp, sn, rp, rn;
+	    seq_t *s = get_seq(xx->io, xx->select_seq);
+	    sequence_cigar2pos(xx->io, s,
+			       xx->screen->cigar_ind[i],
+			       xx->screen->cigar_len[i],
+			       &sp, &sn, &rp, &rn);
+	    sp--;
+	    rp--;
+
+	    xx->select_start     = rp + xx->screen->pos[pos] - 
+		xx->screen->pos[0];
+	    xx->select_start_nth = rn + xx->screen->nth[pos] -
+		xx->screen->nth[0];
+	}
+
+	Tk_OwnSelection(EDTKWIN(xx->ed), XA_PRIMARY, edSelectionLost,
+			(ClientData)xx);
+
+	redisplaySelection(xx);
+	return;
+#if 0
 	tg_rec cnum;
 	int cpos, left, right, orient;
 	seq_t *s = get_seq(xx->io, xx->select_seq);
@@ -2815,11 +3221,12 @@ void edSelectFrom(edview *xx, int pos) {
 
 	if (xx->ed->display_cutoffs) {
 	    left  = 0;
-	    right = ABS(s->len);
+	    right = sequence_unpadded_len(s, NULL);
 	} else {
 	    if ((s->len < 0) ^ orient) {
-		left  = ABS(s->len) - (s->right-1) - 1;
-		right = ABS(s->len) - (s->left-1);
+		int ulen = sequence_unpadded_len(s, NULL);
+		left  = ulen - (s->right-1) - 1;
+		right = ulen - (s->left-1);
 	    } else {
 		left  = s->left - 1;
 		right = s->right;
@@ -2832,6 +3239,12 @@ void edSelectFrom(edview *xx, int pos) {
 	    pos = right+1;
 
 	cache_decr(xx->io, s);
+#endif
+    } else {
+	if (pos >= 0 && pos <= xx->displayWidth)
+	    pos = xx->screen->pos[pos];
+	else
+	    pos += xx->displayPos; /* Random guess! */
     }
     xx->select_start = xx->select_end = pos;
 
@@ -2842,18 +3255,58 @@ void edSelectFrom(edview *xx, int pos) {
     redisplaySelection(xx);
 }
 
-void edSelectTo(edview *xx, int pos) {
+void edSelectTo(edview *xx, int pos, int nth) {
     if (!xx->select_made) {
-	edSelectFrom(xx, pos);
+	edSelectFrom(xx, pos, nth);
     }
 
     /* Undisplay old selection */
     redisplaySelection(xx);
 
     /* Set start/end */
-    pos += xx->displayPos;
     if (xx->select_seq != xx->cnum) {
  	tg_rec cnum;
+	tg_rec key;
+	HacheItem *hi;
+	int i, p, ulen, unth;
+	seq_t *s = get_seq(xx->io, xx->select_seq);
+
+	key = xx->cursor_rec;
+	if (!xx->rec_hash || !xx->r)
+	    return;
+
+	if (!(hi = HacheTableSearch(xx->rec_hash, (char *)&key, sizeof(key))))
+	    return;
+	assert(xx->r[hi->data.i].rec == xx->cursor_rec);
+
+	i = hi->data.i;
+	if ((p = xx->screen->rpos[i]) >= 0) {
+	    /* p chars in from the left screen edge */
+	    xx->select_end     = xx->screen->pos[pos] - xx->screen->pos[p];
+	    xx->select_end_nth = xx->screen->nth[pos] - xx->screen->nth[p];
+	} else {
+	    /* -p bases into the raw sequence */
+	    int sp, sn, rp, rn;
+	    sequence_cigar2pos(xx->io, s,
+			       xx->screen->cigar_ind[i],
+			       xx->screen->cigar_len[i],
+			       &sp, &sn, &rp, &rn);
+	    sp--;
+	    rp--;
+
+	    xx->select_end     = rp + xx->screen->pos[pos]-xx->screen->pos[0];
+	    xx->select_end_nth = rn + xx->screen->nth[pos]-xx->screen->nth[0];
+	}
+
+	if (xx->select_end >= (ulen = sequence_unpadded_len(s, &unth))) {
+	    xx->select_end = ulen-1;
+	    xx->select_end_nth = unth;
+	}
+
+	redisplaySelection(xx);
+	return;
+
+#if 0
 	int cpos, left, right, orient;
 	seq_t *s = get_seq(xx->io, xx->select_seq);
 
@@ -2864,11 +3317,12 @@ void edSelectTo(edview *xx, int pos) {
 
 	if (xx->ed->display_cutoffs) {
 	    left  = 0;
-	    right = ABS(s->len);
+	    right = sequence_unpadded_len(s, NULL);
 	} else {
 	    if ((s->len < 0) ^ orient) {
-		left  = ABS(s->len) - (s->right-1) - 1;
-		right = ABS(s->len) - (s->left-1);
+		int ulen = sequence_unpadded_len(s, NULL);
+		left  = ulen - (s->right-1) - 1;
+		right = ulen - (s->left-1);
 	    } else {
 		left  = s->left - 1;
 		right = s->right;
@@ -2881,6 +3335,12 @@ void edSelectTo(edview *xx, int pos) {
 	    pos = right-1;
 
 	cache_decr(xx->io, s);
+#endif
+    } else {
+	if (pos >= 0 && pos <= xx->displayWidth)
+	    pos = xx->screen->pos[pos];
+	else
+	    pos += xx->displayPos;
     }
     xx->select_end = pos;
 
@@ -2888,7 +3348,8 @@ void edSelectTo(edview *xx, int pos) {
     redisplaySelection(xx);
 }
 
-void edSelectSet(edview *xx, tg_rec rec, int start, int end) {
+void edSelectSet(edview *xx, tg_rec rec, int start, int start_nth, 
+		 int end, int end_nth) {
     int do_x = 0;
 
     /* Undisplay an old selection */
@@ -2898,10 +3359,12 @@ void edSelectSet(edview *xx, tg_rec rec, int start, int end) {
     xx->select_made = 0;
 
 
-    xx->select_seq   = rec;
-    xx->select_start = start;
-    xx->select_end   = end;
-    xx->select_made  = 1;
+    xx->select_seq       = rec;
+    xx->select_start     = start;
+    xx->select_start_nth = start_nth;
+    xx->select_end       = end;
+    xx->select_end_nth   = end_nth;
+    xx->select_made      = 1;
 
     /* Scroll and redraw if appropriate */
     if (xx->select_end+2 >= xx->displayPos + xx->displayWidth) {
@@ -2933,38 +3396,92 @@ void edSelectSet(edview *xx, tg_rec rec, int start, int end) {
 int edGetSelection(ClientData clientData, int offset, char *buffer,
 		   int bufsize) {
     Editor *ed = (Editor *)clientData;
-    int start, end, len;
+    int start, end, len, st_exists, en_exists;
     edview *xx = ed->xx;
+    seq_t *s, *sorig;
+    int bin_comp = 0;
+    HacheItem *hi;
 
     /* Do we have a selection? */
     if (!xx->select_made)
 	return -1;
 
-    start = xx->select_start + offset;
-    end   = xx->select_end;
+    if (xx->select_seq == xx->cnum) {
+	/* Swap if start..range is backwards */
+	if ((xx->select_start     > xx->select_end) || 
+	    (xx->select_start    == xx->select_end &&
+	     xx->select_start_nth > xx->select_end_nth)) {
+	    int tmp;
+	    tmp = xx->select_start;
+	    xx->select_start = xx->select_end;
+	    xx->select_end = tmp;
+	    tmp = xx->select_start_nth;
+	    xx->select_start_nth = xx->select_end_nth;
+	    xx->select_end_nth = tmp;
+	}
+	start = xx->select_start;
+	len = xx->select_end - xx->select_start + 1;
+	calculate_consensus_simple(xx->io, xx->cnum,
+				   xx->select_start, //xx->select_start_nth,
+				   xx->select_end,   //xx->select_end_nth
+				   buffer, NULL);
+    } else {
+	if (!(s = get_seq(xx->io, xx->select_seq)))
+	    return -1;
+	cache_incr(xx->io, s);
+	start = sequence_get_spos(xx->io, &s,
+				  xx->select_start, xx->select_start_nth,
+				  &st_exists);
+	end   = sequence_get_spos(xx->io, &s,
+				  xx->select_end,   xx->select_end_nth,
+				  &en_exists);
+	start += offset;
+	end   += offset;
+	cache_decr(xx->io, s);
+    
+	hi = HacheTableSearch(xx->rec_hash,
+			      (char *)&xx->select_seq,
+			      sizeof(xx->select_seq));
+	if (hi) {
+	    assert(xx->r[hi->data.i].rec == xx->select_seq);
+	    bin_comp = xx->r[hi->data.i].comp;
+	}
 
-    if (start > end) {
-	len = start;
-	start = end;
-	end = len;
-    }
+	if (start == end && !st_exists && !en_exists)
+	    return 0;
 
-    len = end - start+1 > bufsize ? bufsize : end - start + 1;
-
-    if (len && xx->select_seq) {
-	if (xx->select_seq != xx->cnum) {
-	    seq_t *s, *sorig;
-	    sorig = s = get_seq(xx->io, xx->select_seq);
-	    if (s->len < 0) {
-		s = dup_seq(s);
-		complement_seq_t(s);
-	    }
-	    memcpy(buffer, s->seq+start, len);
-	    if (s != sorig)
-		free(s);
+	if ((xx->select_start > xx->select_end ||
+	     (xx->select_start == xx->select_end &&
+	      xx->select_start_nth > xx->select_end_nth))
+	    ^ (s->len < 0)
+	    ^ bin_comp) {
+	    if (!st_exists) start--;
 	} else {
-	    calculate_consensus_simple(xx->io, xx->cnum, start, start+len-1,
-				       buffer, NULL);
+	    if (!st_exists) start++;
+	}
+
+	if (start > end) {
+	    len = start;
+	    start = end;
+	    end = len;
+	}
+
+	len = end - start+1 > bufsize ? bufsize : end - start + 1;
+
+	sorig = s = get_seq(xx->io, xx->select_seq);
+	if (s->len < 0) {
+	    s = dup_seq(s);
+	    complement_seq_t(s);
+	    start = s->len - end-1;
+	}
+	memcpy(buffer, s->seq+start, len);
+	if (s != sorig) {
+	    free(s);
+	}
+
+	/* Reverse comp if bin is complemented too */
+	if (bin_comp) {
+	    complement_seq(buffer, len);
 	}
     }
 

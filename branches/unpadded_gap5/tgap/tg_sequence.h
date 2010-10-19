@@ -91,6 +91,7 @@ void complement_seq_t(seq_t *s);
 
 int sequence_get_base(GapIO *io, seq_t **s, int pos, char *base, int *conf,
 		      int *cutoff, int contig_orient);
+int sequence_get_spos(GapIO *io, seq_t **s, int pos, int nth, int *exists);
 int sequence_get_base4(GapIO *io, seq_t **s, int pos, char *base, double *conf,
 		       int *cutoff, int contig_orient);
 int sequence_replace_base(GapIO *io, seq_t **s, int pos, char base, int conf,
@@ -101,6 +102,39 @@ int sequence_delete_base(GapIO *io, seq_t **s, int pos,
 			 int contig_orient);
 
 int sequence_invalidate_consensus(GapIO *io, seq_t *s);
+
+
+/*
+ * Manipulation of data involving unpadded to padded (and vice versa)
+ * transfomations.
+ */
+int sequence_get_spos(GapIO *io, seq_t **s, int pos, int nth, int *exists);
+int sequence_get_upos(GapIO *io, seq_t **s, int raw_pos, int *upos, int *unth);
+int sequence_padded_len(seq_t *s);
+int sequence_unpadded_len(seq_t *s, int *nth);
+int sequence_cigar2pos(GapIO *io, seq_t *s, int cigar_ind, int cigar_len,
+		       int *spos_p, int *snth_p, int *rpos_p, int *rnth_p);
+int sequence_pos2cigar(GapIO *io, seq_t *n, int pos, int nth,
+		       int *cigar_ind, int *cigar_op, int *cigar_len,
+		       int *spos_p, int *pos_p, int *nth_p, int *comp_p);
+int seq_padded(GapIO *io, seq_t *s, int **pos_p, int **nth_p,
+	       char **seq_p, char **conf_p, int *plen, int *comp_p);
+int seq_depad(GapIO *io, seq_t **s, char *seq, char *conf, int *pos, int *nth,
+	      int len, int comp);
+int sequence_set_cigar(GapIO *io, seq_t **s, unsigned char *cig, int len);
+int seq_insert_cigar(seq_t **s, int idx, int len, char op, int merge);
+int seq_delete_cigar(seq_t **s, int idx, int merge);
+int sequence_edit_op(GapIO *io, seq_t **s, int pos, int nth, int op,
+		     int indel);
+int sequence_get_ubase(GapIO *io, seq_t **s, int pos, int nth,
+		       char *base, int *conf, int *cutoff);
+int sequence_replace_ubase(GapIO *io, seq_t **s, int pos, int nth,
+			   char base, int conf, int contig_orient);
+int sequence_insert_ubase(GapIO *io, seq_t **s, int pos, int nth,
+			  char base, char conf, int contig_orient);
+int sequence_delete_ubase(GapIO *io, seq_t **s, int pos, int nth,
+			  int contig_orient);
+
 
 /*
  * Given a seq_t struct this updates the internal pointers to be valid offsets

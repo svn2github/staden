@@ -925,7 +925,9 @@ static int sequence_cmd(ClientData clientData, Tcl_Interp *interp,
 	"get_conf",	"get_conf4",    "get_contig",   "get_position",
 	"get_orient",   "get_mapping_qual",
 	"get_base",     "insert_base",  "delete_base",  "replace_base",
-	"get_clips",    "set_clips",    "move_annos",
+	"get_clips",    "set_clips",    "move_annos",   "get_raw_pos",
+	"replace_ubase","insert_ubase", "delete_ubase", "get_ubase",
+	"edit_cigar_op","get_cigar",    "set_cigar",
 	(char *)NULL,
     };
 
@@ -936,7 +938,9 @@ static int sequence_cmd(ClientData clientData, Tcl_Interp *interp,
 	GET_CONF,       GET_CONF4,      GET_CONTIG,     GET_POSITION,
 	GET_ORIENT,     GET_MAPPING_QUAL,
 	GET_BASE,       INSERT_BASE,    DELETE_BASE,    REPLACE_BASE,
-	GET_CLIPS,      SET_CLIPS,      MOVE_ANNOS
+	GET_CLIPS,      SET_CLIPS,      MOVE_ANNOS,	GET_RAW_POS,
+	REPLACE_UBASE,  INSERT_UBASE,   DELETE_UBASE,   GET_UBASE,
+	EDIT_CIGAR_OP,  GET_CIGAR,      SET_CIGAR,
     };
 
     if (objc < 2) {
@@ -1116,6 +1120,25 @@ static int sequence_cmd(ClientData clientData, Tcl_Interp *interp,
 	break;
     }
 
+    case GET_UBASE: {
+	char base;
+	int pos, nth, conf, cutoff;
+
+	if (objc != 4) {
+	    vTcl_SetResult(interp, "wrong # args: should be "
+			   "\"%s get_base position nth\"\n",
+			   Tcl_GetStringFromObj(objv[0], NULL));
+	    return TCL_ERROR;
+	}
+
+	Tcl_GetIntFromObj(interp, objv[2], &pos);
+	Tcl_GetIntFromObj(interp, objv[3], &nth);
+	sequence_get_ubase(ts->io, &ts->seq, pos, nth,
+			   &base, &conf, &cutoff);
+	vTcl_SetResult(interp, "%c %d %d", base, conf, cutoff);
+	break;
+    }
+
     case INSERT_BASE: {
 	char base;
 	int pos, conf;
@@ -1134,6 +1157,25 @@ static int sequence_cmd(ClientData clientData, Tcl_Interp *interp,
 	break;
     }
 	
+    case INSERT_UBASE: {
+	char base;
+	int pos, nth, conf;
+
+	if (objc != 6) {
+	    vTcl_SetResult(interp, "wrong # args: should be "
+			   "\"%s insert_base position nth call confidence\"\n",
+			   Tcl_GetStringFromObj(objv[0], NULL));
+	    return TCL_ERROR;
+	}
+
+	Tcl_GetIntFromObj(interp, objv[2], &pos);
+	Tcl_GetIntFromObj(interp, objv[3], &nth);
+	base = *Tcl_GetString(objv[4]);
+	Tcl_GetIntFromObj(interp, objv[5], &conf);	
+	sequence_insert_ubase(ts->io, &ts->seq, pos, nth, base, conf, 1);
+	break;
+    }
+
     case DELETE_BASE: {
 	int pos;
 
@@ -1146,6 +1188,22 @@ static int sequence_cmd(ClientData clientData, Tcl_Interp *interp,
 
 	Tcl_GetIntFromObj(interp, objv[2], &pos);
 	sequence_delete_base(ts->io, &ts->seq, pos, 1);
+	break;
+    }
+	
+    case DELETE_UBASE: {
+	int pos, nth;
+
+	if (objc != 4) {
+	    vTcl_SetResult(interp, "wrong # args: should be "
+			   "\"%s delete_base position nth\"\n",
+			   Tcl_GetStringFromObj(objv[0], NULL));
+	    return TCL_ERROR;
+	}
+
+	Tcl_GetIntFromObj(interp, objv[2], &pos);
+	Tcl_GetIntFromObj(interp, objv[3], &nth);
+	sequence_delete_ubase(ts->io, &ts->seq, pos, nth, 1);
 	break;
     }
 	
@@ -1164,6 +1222,25 @@ static int sequence_cmd(ClientData clientData, Tcl_Interp *interp,
 	base = *Tcl_GetString(objv[3]);
 	Tcl_GetIntFromObj(interp, objv[4], &conf);	
 	sequence_replace_base(ts->io, &ts->seq, pos, base, conf, 1);
+	break;
+    }
+
+    case REPLACE_UBASE: {
+	char base;
+	int pos, nth, conf;
+
+	if (objc != 6) {
+	    vTcl_SetResult(interp, "wrong # args: should be "
+			   "\"%s replace_base position nth call confidence\"\n",
+			   Tcl_GetStringFromObj(objv[0], NULL));
+	    return TCL_ERROR;
+	}
+
+	Tcl_GetIntFromObj(interp, objv[2], &pos);
+	Tcl_GetIntFromObj(interp, objv[3], &nth);
+	base = *Tcl_GetString(objv[4]);
+	Tcl_GetIntFromObj(interp, objv[5], &conf);	
+	sequence_replace_ubase(ts->io, &ts->seq, pos, nth, base, conf, 1);
 	break;
     }
 
@@ -1205,6 +1282,105 @@ static int sequence_cmd(ClientData clientData, Tcl_Interp *interp,
 	sequence_move_annos(ts->io, &ts->seq, dist);
 
 	break;
+    }
+
+    case GET_RAW_POS: {
+	int pos, nth, rpos, exists;
+
+	if (objc != 4) {
+	    vTcl_SetResult(interp, "wrong # args: should be "
+			   "\"%s get_raw_pos position nth_base\"\n",
+			   Tcl_GetStringFromObj(objv[0], NULL));
+	    return TCL_ERROR;
+	}
+
+	Tcl_GetIntFromObj(interp, objv[2], &pos);
+	Tcl_GetIntFromObj(interp, objv[3], &nth);
+
+	{
+	    int cigar_ind, cigar_op, cigar_len, spos, rpos, rnth, comp;
+	    int r;
+	    
+	    r = sequence_pos2cigar(ts->io, ts->seq, pos, nth,
+				   &cigar_ind, &cigar_op, &cigar_len,
+				   &spos, &rpos, &rnth, &comp);
+	    printf("UP %d/%d (%d/%d) => r=%d, cig=%d %c%d, spos=%d, comp=%d\n",
+		   pos, nth, rpos, rnth, r,
+		   cigar_ind, cigar_op, cigar_len, spos, comp);
+	}
+
+	rpos = sequence_get_spos(ts->io, &ts->seq, pos, nth, &exists);
+	vTcl_SetResult(interp, "%d %d", rpos, exists);
+	break;
+    }
+
+    case EDIT_CIGAR_OP: {
+	int pos, nth, op, is_indel, r;
+
+	if (objc != 6) {
+	    vTcl_SetResult(interp, "wrong # args: should be "
+			   "\"%s edit_cigar_op position nth op is_indel\"\n",
+			   Tcl_GetStringFromObj(objv[0], NULL));
+	    return TCL_ERROR;
+	}
+
+	Tcl_GetIntFromObj(interp, objv[2], &pos);
+	Tcl_GetIntFromObj(interp, objv[3], &nth);
+	op = *Tcl_GetStringFromObj(objv[4], NULL);
+	Tcl_GetIntFromObj(interp, objv[5], &is_indel);
+	r = sequence_edit_op(ts->io, &ts->seq, pos, nth, op, is_indel);
+	vTcl_SetResult(interp, "%d", r);
+	break;
+    }
+
+    case GET_CIGAR: {
+	int i;
+	char *str = malloc(2*ts->seq->alignment_len+1), *cp = str;
+	for (i = 0; i < ts->seq->alignment_len; i+=2) {
+	    cp += sprintf(cp, "%d%c",
+			  ts->seq->alignment[i],
+			  ts->seq->alignment[i+1]);
+	}
+	*cp++ = 0;
+
+	Tcl_SetStringObj(Tcl_GetObjResult(interp), str, -1);
+	free(str);
+	break;
+    }
+
+    case SET_CIGAR: {
+	char *str;
+	unsigned char *cig;
+	int cig_ind;
+
+	if (objc != 3) {
+	    vTcl_SetResult(interp, "wrong # args: should be "
+			   "\"%s set_cigar CIGAR_string\"\n",
+			   Tcl_GetStringFromObj(objv[0], NULL));
+	    return TCL_ERROR;
+	}
+	
+	str = Tcl_GetStringFromObj(objv[2], NULL);
+	cig = malloc(strlen(str)+1);
+	if (!cig)
+	    return TCL_ERROR;
+
+	/* parse cigar string */
+	cig_ind = 0;
+	while (*str) {
+	    int len;
+
+	    for (len = 0; isdigit(*str); str++) 
+		len = len*10 + *str-'0';
+	    if (!*str)
+		break;
+
+	    cig[cig_ind++] = len;
+	    cig[cig_ind++] = *str++;
+	};
+	cig[cig_ind] = 0;
+
+	sequence_set_cigar(ts->io, &ts->seq, cig, cig_ind);
     }
     }
 

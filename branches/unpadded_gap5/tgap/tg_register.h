@@ -127,6 +127,7 @@ typedef struct _cursor_t {
     int private;	/* Whether this is a private cursor */
     tg_rec seq;		/* Cursor sequence number (0 for consensus) */
     int pos;		/* Position from start of sequence */
+    int nth;		/* Nth base at position pos */
     int abspos; 	/* Absolute position in contig */
     int sent_by;	/* reg id of display that created cursor */
     int job;    	/* move, reused, or delete */

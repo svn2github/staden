@@ -284,10 +284,16 @@ void find_pair(GapIO *io, HacheTable *pair, tg_rec recno, char *tname,
     }
 }
 
-
-tg_rec save_range_sequence(GapIO *io, seq_t *seq, uint8_t mapping_qual,
-			   HacheTable *pair, int is_pair, char *tname,
-			   contig_t *c, tg_args *a, int flags, library_t *lib) {
+/*
+ * Start,end are the aligned coordinates to store this sequence. If both
+ * are zero then we use seq->pos and seq->pos + len-1 instead. (The only
+ * reason they differ is if we're generating this with unpadded coordinates
+ * and the sequence includes indels.)
+ */
+tg_rec save_range_sequence(GapIO *io, seq_t *seq, int start, int end,
+			   uint8_t mapping_qual, HacheTable *pair,
+			   int is_pair, char *tname, contig_t *c,
+			   tg_args *a, int flags, library_t *lib) {
     range_t r, *r_out;
     tg_rec recno;
     bin_index_t *bin;
@@ -301,8 +307,15 @@ tg_rec save_range_sequence(GapIO *io, seq_t *seq, uint8_t mapping_qual,
     }
 
     /* Create range */
-    r.start = seq->pos;
-    r.end   = seq->pos + ABS(seq->len)-1;
+    if (start == 0 && end == 0 && ABS(seq->len != 1)) {
+	r.start = seq->pos;
+	r.end   = seq->pos + ABS(seq->len)-1; 
+   } else {
+	r.start = start; //seq->pos;
+	r.end   = end;   //seq->pos + ABS(seq->len)-1;
+    }
+    r.start_nth = 0;
+    r.end_nth   = 0;
     r.rec   = 0;
     r.mqual = mapping_qual;
     r.pair_rec = 0;

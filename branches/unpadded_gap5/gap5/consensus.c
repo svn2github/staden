@@ -10,6 +10,14 @@
 #include <tg_gio.h>
 
 #include "consensus.h"
+#include "pileup.h"
+
+/*
+ * Consensus cache is disabled for now due to the changes created with the
+ * unpadded coordinates.
+ * FIXME: make this code work again.
+ */
+#define DISABLE_CONSENSUS_CACHE
 
 #define CONS_BLOCK_SIZE 4096
 
@@ -107,9 +115,14 @@ int calculate_consensus_simple(GapIO *io, tg_rec contig, int start, int end,
     rangec_t *r;
     contig_t *c;
     int left, right;
-    
+   
+
     printf("Calculate_consensus_simple(contig=%"PRIrec", range=%d..%d)\n",
 	   contig, start, end);
+
+#ifdef DISABLE_CONSENSUS_CACHE
+    return calculate_consensus_simple2(io, contig, start, end, con, qual);
+#endif
 
     /*
      * We cache consensus in the first bin smaller than a specific size
@@ -205,7 +218,7 @@ int calculate_consensus_simple(GapIO *io, tg_rec contig, int start, int end,
 			size_t extra_len =
 			    (s->name       ? strlen(s->name)       : 0) +
 			    (s->trace_name ? strlen(s->trace_name) : 0) +
-			    (s->alignment  ? strlen(s->alignment)  : 0) +
+			    (s->alignment  ? strlen((char *)s->alignment):0) +
 			    (bend - bstart + 1)*2;
 			s = cache_item_resize(s, sizeof(*s) + extra_len);
 		    }
@@ -419,29 +432,19 @@ int calculate_consensus(GapIO *io, tg_rec contig, int start, int end,
 }
 
 typedef struct {
-    double base_qual[4];
-    double gap;
-    double base;
-    int depth;
-} cstat;
+    double (*cvec)[4]; /* cvec[0-3] = A,C,G,T */
+    double (*pvec)[2]; /* pvec[0] = gap, pvec[1] = base */
+    int     *depth;
+    char    *perfect;
+    int      ncols;
+    int      cols_max;
+} cp_t;
 
-#if 0
-/*
- * Like contig_seqs_in_range, but we also sum the values into the cvec array
- * at the same time.
- *
- * The purpose of this is to allow partial or complete caching of the
- * consensus data, meaning we only need to load bin tracks instead of
- * all the sequences themselves.
- */
-static int contig_consensus_in_range2(GapIO *io, tg_rec brec,
-				      int start, int end,
-				      int offset, cstat *cv, int complement) {
+static int consensus_pileup(void *cd, pileup_t *p, int pos, int nth) {
     double slx_overcall_prob  = 1.0/4350000, lover,  lomover;
     double slx_undercall_prob = 1.0/2800000, lunder, lomunder;
-    int i, n, f_a, f_b;
-    bin_index_t *bin = get_bin(io, brec);
-    range_t *l;
+    cp_t *c = (cp_t *)cd;
+    int col = c->ncols;
 
     /* log overcall, log one minus overcall, etc */
     lover    = log(slx_overcall_prob);
@@ -449,176 +452,79 @@ static int contig_consensus_in_range2(GapIO *io, tg_rec brec,
     lunder   = log(slx_undercall_prob);
     lomunder = log(1-slx_undercall_prob);
 
-    cache_incr(io, bin);
-    if (bin->flags & BIN_COMPLEMENTED) {
-	complement ^= 1;
-    }
+    if (col >= c->cols_max)
+	return 1; /* Don't call me any more */
 
-    if (complement) {
-	f_a = -1;
-	f_b = offset + bin->size-1;
-    } else {
-	f_a = +1;
-	f_b = offset;
-    }
+    c->cvec[col][0] = 0; c->pvec[col][0] = 0;
+    c->cvec[col][1] = 0; c->pvec[col][1] = 0;
+    c->cvec[col][2] = 0; 
+    c->cvec[col][3] = 0; 
 
-    /*
-    printf("BIN #%d %d + %d..%d (%d..%d)\n",
-	   brec, offset, bin->pos, bin->pos + bin->size,
-	   bin->start_used, bin->end_used);
-    */
-    if (!(end < NMIN(bin->start_used, bin->end_used) ||
-	  start > NMAX(bin->start_used, bin->end_used))
-	&& bin->rng) {
-	track_t *tr = NULL;
-	cstat *loc;
+    for (; p; p = p->next) {
+	int base_l;
 
-	tr = bin_get_track(io, bin, TRACK_CONS_ARR);
-
-	if (tr) {
-	    loc = arrp(cstat, tr->data, 0);
-	} else {
-	    tr = bin_create_track(io, bin, TRACK_CONS_ARR);
-	    //tr = track_create_fake(TRACK_CONS_ARR, 0);
-	    tr->nitems    = bin->end_used - bin->start_used + 1;
-	    tr->item_size = sizeof(cstat);
-	    tr->data      = ArrayCreate(tr->item_size, tr->nitems);
-	    //tr->flag     |= TRACK_FLAG_FREEME;
-
-	    bin_add_track(io, &bin, tr);
-    
-	    loc = arrp(cstat, tr->data, 0);
-	    memset(&loc[0], 0, (bin->end_used - bin->start_used + 1) *
-		   sizeof(*loc));
-
-	    for (n = 0; n < ArrayMax(bin->rng); n++) {
-		l = arrp(range_t, bin->rng, n);
-
-		if (l->flags & (GRANGE_FLAG_UNUSED | GRANGE_FLAG_ISANNO))
-		    continue;
-
-		if (1 || (NMAX(l->start, l->end) >= start
-			  && NMIN(l->start, l->end) <= end)) {
-#if 0
-		    seq_t *s = (seq_t *)cache_search(io, GT_Seq, l->rec);
-		    seq_t *sorig = s;
-		    int p;
-
-		    if ((s->len < 0)) {
-			s = dup_seq(s);
-			complement_seq_t(s);
-		    }
-
-		    /*
-		      printf("Seq %c%d %d..%d\n",
-		      s == sorig ? '>' : '<',
-		      l->rec, s->left, s->right);
-		    */
-		    for (p = s->left-1; p < s->right; p++) {
-			char base;
-			double q[4];
-			int j, k;
-
-			sequence_get_base4(io, &s, p, &base, q, NULL, 0);
-			/*
-			  printf("  %5d+%3d %2d %c %f %f %f %f\n",
-			  offset, p + l->start, p,
-			  base, q[0], q[1], q[2], q[3]);
-			*/
-		    
-			k = p + l->start - bin->start_used;
-			if (k < 0 || k >= bin->end_used - bin->start_used + 1) {
-			    printf("Error: start/end used summary is invalid\n");
-			}
-			assert(k >= 0 &&  k < bin->end_used - bin->start_used + 1);
-
-			switch (lookup[base]) {
-			case 0: case 1: case 2: case 3: /* ACGT */
-			    loc[k].base_qual[0] += q[0];
-			    loc[k].base_qual[1] += q[1];
-			    loc[k].base_qual[2] += q[2];
-			    loc[k].base_qual[3] += q[3];
-
-			    /* Small boost for called base to resolve ties */
-			    loc[k].base_qual[lookup[base]] += 1e-5;
-
-			    /* Fall through */
-			default: /* N */
-			    loc[k].gap  += lover;
-			    loc[k].base += lomover;
-			    break;
-
-			case 4: /* gap */
-			    loc[k].gap  += lomunder;
-			    loc[k].base += lunder;
-			    break;
-			}
-
-			loc[k].depth++;
-		    }
-
-		    if (s != sorig)
-			free(s);
-#endif
-		}
-	    }
-	}
-	
-
-	/*
-	printf("Bin %d summary\n", brec);
-	for (i = 0; i <= bin->end_used - bin->start_used; i++) {
-	    printf("    %4d %4d %2d %f %f %f %f\n",
-		   i + bin->start_used,
-		   loc[i].depth,
-		   loc[i].base_qual[0],
-		   loc[i].base_qual[1],
-		   loc[i].base_qual[2],
-		   loc[i].base_qual[3]);
-	}
-	*/
-	
-	for (i = 0; i <= bin->end_used - bin->start_used; i++) {
-	    int j = NORM(i + bin->start_used);
-	    if (j >= start && j <= end) {
-		int k = j-start;
-		cv[k].base_qual[0] += loc[i].base_qual[0];
-		cv[k].base_qual[1] += loc[i].base_qual[1];
-		cv[k].base_qual[2] += loc[i].base_qual[2];
-		cv[k].base_qual[3] += loc[i].base_qual[3];
-		cv[k].gap          += loc[i].gap;
-		cv[k].base         += loc[i].base;
-		cv[k].depth        += loc[i].depth;
-	    }
-	}
-	
-	//free(loc);
-    }
-
-    /* Recurse down bins */
-    for (i = 0; i < 2 > 0; i++) {
-	bin_index_t *ch;
-	if (!bin->child[i])
+	if (p->sclip)
 	    continue;
-	ch = get_bin(io, bin->child[i]);
-	if (end   >= NMIN(ch->pos, ch->pos + ch->size-1) &&
-	    start <= NMAX(ch->pos, ch->pos + ch->size-1)) {
-	    contig_consensus_in_range2(io, bin->child[i], start, end,
-				       NMIN(ch->pos, ch->pos + ch->size-1),
-				       cv, complement);
+
+	base_l = lookup[p->base];
+	if (base_l < 4 && p->qual == 100)
+	    c->perfect[col] |= (1<<base_l);
+
+	/* Don't support 4-qual atm, so fake generate them */
+	switch (base_l) {
+	case 0:
+	    c->cvec[col][0] += lo2l[p->qual];
+	    c->cvec[col][1] += lo2r[p->qual];
+	    c->cvec[col][2] += lo2r[p->qual];
+	    c->cvec[col][3] += lo2r[p->qual];
+	    c->pvec[col][0] += lover;
+	    c->pvec[col][1] += lomover;
+	    break;
+
+	case 1:
+	    c->cvec[col][0] += lo2r[p->qual];
+	    c->cvec[col][1] += lo2l[p->qual];
+	    c->cvec[col][2] += lo2r[p->qual];
+	    c->cvec[col][3] += lo2r[p->qual];
+	    c->pvec[col][0] += lover;
+	    c->pvec[col][1] += lomover;
+	    break;
+
+	case 2:
+	    c->cvec[col][0] += lo2r[p->qual];
+	    c->cvec[col][1] += lo2r[p->qual];
+	    c->cvec[col][2] += lo2l[p->qual];
+	    c->cvec[col][3] += lo2r[p->qual];
+	    c->pvec[col][0] += lover;
+	    c->pvec[col][1] += lomover;
+	    break;
+
+	case 3:
+	    c->cvec[col][0] += lo2r[p->qual];
+	    c->cvec[col][1] += lo2r[p->qual];
+	    c->cvec[col][2] += lo2r[p->qual];
+	    c->cvec[col][3] += lo2l[p->qual];
+	    c->pvec[col][0] += lover;
+	    c->pvec[col][1] += lomover;
+	    break;
+
+	default: /* N */
+	    c->pvec[col][0] += lover;
+	    c->pvec[col][1] += lomover;
+	    break;
+	    
+	case 4: /* gap */
+	    c->pvec[col][0] += lomunder;
+	    c->pvec[col][1] += lunder;
+	    break;
 	}
+
+	c->depth[col]++;
     }
 
-    cache_decr(io, bin);
+    c->ncols++;
     return 0;
 }
-
-int contig_consensus_in_range(GapIO *io, contig_t **c, int start, int end,
-			      cstat *cv) {
-    return contig_consensus_in_range2(io, contig_get_bin(c), start, end,
-				      contig_offset(io, c), cv, 0);
-}
-#endif
 
 /*
  * The core of the consensus algorithm.
@@ -640,12 +546,12 @@ static int calculate_consensus_bit(GapIO *io, tg_rec contig,
     int len = end - start + 1;
     double slx_overcall_prob  = 1.0/4350000, lover,  lomover;
     double slx_undercall_prob = 1.0/2800000, lunder, lomunder;
+    cp_t cpt;
 
     double (*cvec)[4]; /* cvec[0-3] = A,C,G,T */
     double (*pvec)[2]; /* pvec[0] = gap, pvec[1] = base */
     char *perfect; /* quality=100 bases */
     int *depth;
-    //cstat *cs;
  
     /* log overcall, log one minus overcall, etc */
     lover    = log(slx_overcall_prob);
@@ -663,6 +569,13 @@ static int calculate_consensus_bit(GapIO *io, tg_rec contig,
     if (NULL == (perfect = (char *)calloc(len, sizeof(char))))
 	return -1;
 
+    cpt.pvec = pvec;
+    cpt.cvec = cvec;
+    cpt.depth = depth;
+    cpt.perfect = perfect;
+    cpt.ncols = 0;
+    cpt.cols_max = len;
+
     if (!lookup_done) {
 	/* Character code */
 	memset(lookup, 5, 256);
@@ -671,7 +584,7 @@ static int calculate_consensus_bit(GapIO *io, tg_rec contig,
 	lookup['C'] = lookup['c'] = 1;
 	lookup['G'] = lookup['g'] = 2;
 	lookup['T'] = lookup['t'] = 3;
-	lookup['*'] = 4;
+	lookup['*'] = lookup['-'] = 4;
 
 	/* Log odds value to log(P) */
 	for (i = -128; i < 128; i++) {
@@ -682,30 +595,10 @@ static int calculate_consensus_bit(GapIO *io, tg_rec contig,
 	}
     }
 
-#if 0
-    /* Accumulate... (computes the products via sum of logs) */
-    /* This bit may be cached */
-    cs = (cstat *)malloc((end-start+1) * sizeof(*cs));
-    memset(&cs[0], 0, (end-start+1) * sizeof(*cs));
-    contig_consensus_in_range(io, &c, start, end, cs);
-
-    for (i = 0; i < end-start+1; i++) {
-	cvec[i][0] = cs[i].base_qual[0];
-	cvec[i][1] = cs[i].base_qual[1];
-	cvec[i][2] = cs[i].base_qual[2];
-	cvec[i][3] = cs[i].base_qual[3];
-	pvec[i][0] = cs[i].gap;
-	pvec[i][1] = cs[i].base;
-	depth[i]   = cs[i].depth;
-    }
-
-    free(cs);
-
-#else
-
     /* Find sequences visible */
     r = contig_seqs_in_range(io, &c, start, end, 0, &nr);
 
+#if 0
     for (i = 0; i < nr; i++) {
 	int sp = r[i].start;
 	seq_t *s = (seq_t *)cache_search(io, GT_Seq, r[i].rec);
@@ -780,8 +673,228 @@ static int calculate_consensus_bit(GapIO *io, tg_rec contig,
 	if (s != sorig)
 	    free(s);
     }
+#else
+    pileup_loop(io, r, nr, start, 0, end, 0, consensus_pileup, &cpt);
 #endif
 
+
+    /* and speculate */
+    for (i = 0; i < len; i++) {
+	double probs[6], tot2[4], max;
+	double pad_prob, base_prob;
+
+	/* Perfect => manual edit at 100% */
+	if (perfect[i]) {
+	    cons[i].scores[0] = -127;
+	    cons[i].scores[1] = -127;
+	    cons[i].scores[2] = -127;
+	    cons[i].scores[3] = -127;
+	    cons[i].scores[4] = -127;
+	    cons[i].scores[5] = 0; /* N */
+
+	    cons[i].phred = 255;
+
+	    switch (perfect[i]) {
+	    case 1<<0:
+		cons[i].call = 0;
+		break;
+	    case 1<<1:
+		cons[i].call = 1;
+		break;
+	    case 1<<2:
+		cons[i].call = 2;
+		break;
+	    case 1<<3:
+		cons[i].call = 3;
+		break;
+
+	    default:
+		/* Multiple bases marked with max quality */
+		cons[i].call  = 5;
+		cons[i].phred = 0;
+		break;
+	    }
+
+	    cons[i].scores[cons[i].call] = cons[i].phred;
+	    cons[i].depth = depth[i];
+
+	    continue;
+	}
+
+	/* Gap or base? Work out pad probability initially */
+	/* For this the sum differences is basically the log-odds score */
+	if (pvec[i][0] && pvec[i][1]) {
+	    cons[i].scores[4] = 10*(pvec[i][0] - pvec[i][1]);
+	    pad_prob = pow(10, cons[i].scores[4] / 10.0) /
+		(pow(10, cons[i].scores[4] / 10.0) + 1);
+	    base_prob = 1-pad_prob;
+	} else {
+	    cons[i].scores[4] = 0;
+	    pad_prob = 0;
+	    base_prob = 1;
+	}
+
+	/* Shift so that we never attempt to exp() of all high -ve values */
+	max = cvec[i][0];
+	for (j = 1; j < 4; j++) {
+	    if (max < cvec[i][j])
+		max = cvec[i][j];
+	}
+	for (j = 0; j < 4; j++) {
+	    cvec[i][j] -= max;
+	}
+
+	/*
+	 * And now which base type it may be.
+	 * Here probs[] hold the numerators with the denominators being
+	 * sum(probs[0..4]). It cancels out though so we don't need it.
+	 */
+	for (j = 0; j < 4; j++) {
+	    probs[j] = exp(cvec[i][j]);
+	    if (probs[j] == 0)
+		probs[j] = DBL_MIN;
+	    tot2[j] = 0;
+	}
+
+	/*
+	 * tot2 here is for computing 1-prob without hitting rounding
+	 * issues caused by 1/<some small number>.
+	 *
+	 * If prob is a/(a+b+c+d) then 1-a/(a+b+c+d) = (b+c+d)/(a+b+c+d).
+	 * Factoring in the base_prob B then prob is B.a/(a+b+c+d).
+	 * Hence 1-prob = (a.(1-B)+b+c+d)/(a+b+c+d).
+	 */
+	for (j = 0; j < 4; j++) {
+	    int k;
+	    for (k = 0; k < 4; k++)
+		if (j != k)
+		    tot2[k] += probs[j];
+		else
+		    tot2[k] += probs[j] * pad_prob;
+	}
+
+	/*
+	 * Normalise.
+	 * We compute p as probs[j]/total_prob.
+	 * Then turn this into a log-odds via log(p/(1-p)).
+	 * 1-p has some precision issues in floating point, so we use tot2
+	 * as described above as an alternative way of computing it. This
+	 * gives:
+	 *
+	 * log(p/(1-p)) = log( (probs[j]/total) / (tot2[j] / total))
+	 *              = log(probs[j]/tot2[j])
+	 *              = log(probs[j]) - log(tot2[j])
+	 */
+	cons[i].scores[5] = 0;
+	for (j = 0; j < 4; j++) {
+	    cons[i].scores[j] = TENOVERLOG10 *
+		(log(base_prob * probs[j]) - log(tot2[j]));
+	}
+
+	/* And call */
+	if (cons[i].scores[4] > 0) {
+	    cons[i].call = 4;
+	    max = cons[i].scores[4];
+	} else {
+	    max = -4.7; /* Consensus cutoff */
+	    cons[i].call = 5; /* N */
+	    for (j = 0; j < 4; j++) {
+		if (max < cons[i].scores[j]) {
+		    max = cons[i].scores[j];
+		    cons[i].call = j;
+		}
+	    }
+	}
+
+	if (max >  99) max =  99;
+	if (max < -127) max = -127;
+	cons[i].phred = lo2ph[(int)max];
+
+	cons[i].depth = depth[i];
+    }
+
+    if (r) free(r);
+    free(cvec);
+    free(pvec);
+    free(depth);
+
+    return 0;
+}
+
+/*
+ * The core of the consensus algorithm.
+ *
+ * This uses more memory than the final result in cons[] as it briefly
+ * holds an array of every sequence in the start..end range, so we
+ * typically wrap this up in another function to call it in smaller
+ * blocks.
+ *
+ * Returns 0 on success,
+ *        -1 on failure
+ */
+static int calculate_consensus_ubit(GapIO *io, tg_rec contig,
+				    int start, int start_nth,
+				    int end,   int end_nth,
+				    consensus_t *cons) {
+    int i, j, nr;
+    rangec_t *r = NULL;
+    contig_t *c = (contig_t *)cache_search(io, GT_Contig, contig);
+    int len = end - start + 1;
+    double slx_overcall_prob  = 1.0/4350000, lover,  lomover;
+    double slx_undercall_prob = 1.0/2800000, lunder, lomunder;
+    cp_t cpt;
+
+    double (*cvec)[4]; /* cvec[0-3] = A,C,G,T */
+    double (*pvec)[2]; /* pvec[0] = gap, pvec[1] = base */
+    char *perfect; /* quality=100 bases */
+    int *depth;
+ 
+    /* log overcall, log one minus overcall, etc */
+    lover    = log(slx_overcall_prob);
+    lomover  = log(1-slx_overcall_prob);
+    lunder   = log(slx_undercall_prob);
+    lomunder = log(1-slx_undercall_prob);
+
+    /* Initialise */
+    if (NULL == (cvec = (double (*)[4])calloc(len, 4 * sizeof(double))))
+	return -1;
+    if (NULL == (pvec = (double (*)[2])calloc(len, 2 * sizeof(double))))
+	return -1;
+    if (NULL == (depth = (int *)calloc(len, sizeof(int))))
+	return -1;
+    if (NULL == (perfect = (char *)calloc(len, sizeof(char))))
+	return -1;
+
+    cpt.pvec = pvec;
+    cpt.cvec = cvec;
+    cpt.depth = depth;
+    cpt.perfect = perfect;
+    cpt.ncols = 0;
+    cpt.cols_max = len;
+
+    if (!lookup_done) {
+	/* Character code */
+	memset(lookup, 5, 256);
+	lookup_done = 1;
+	lookup['A'] = lookup['a'] = 0;
+	lookup['C'] = lookup['c'] = 1;
+	lookup['G'] = lookup['g'] = 2;
+	lookup['T'] = lookup['t'] = 3;
+	lookup['*'] = lookup['-'] = 4;
+
+	/* Log odds value to log(P) */
+	for (i = -128; i < 128; i++) {
+	    double p = 1 / (1 + pow(10, -i / 10.0));
+	    lo2l[i] = log(p);
+	    lo2r[i] = log((1-p)/3);
+	    lo2ph[i] = 10*log(1+pow(10, i/10.0))/LOG10+0.4999;
+	}
+    }
+
+    /* Find sequences visible */
+    r = contig_seqs_in_range(io, &c, start, end, 0, &nr);
+    pileup_loop(io, r, nr, start, start_nth, end, end_nth,
+		consensus_pileup, &cpt);
 
     /* and speculate */
     for (i = 0; i < len; i++) {

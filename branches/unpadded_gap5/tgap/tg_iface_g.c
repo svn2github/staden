@@ -1714,6 +1714,7 @@ static int io_contig_write(void *dbh, cached_item *ci) {
     contig_t *c = (contig_t *)&ci->data;
 
     assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
     return io_contig_write_view(io, c, ci->view);
 }
 
@@ -1808,6 +1809,7 @@ static int io_array_write(void *dbh, cached_item *ci) {
     int ret;
 
     assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
     ar = (Array)&ci->data;
     ret = io_generic_write_rec(io, ci->view, GT_RecArray,
 			       ArrayBase(tg_rec, ar),
@@ -1943,6 +1945,7 @@ static int io_anno_ele_write(void *dbh, cached_item *ci) {
     anno_ele_t *e = (anno_ele_t *)&ci->data;
 
     assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
     return io_anno_ele_write_view(io, e, ci->view);
 }
 
@@ -1977,6 +1980,7 @@ static cached_item *io_anno_read(void *dbh, tg_rec rec) {
 }
 
 static int io_anno_write(void *dbh, cached_item *ci) {
+    assert(ci->rec > 0);
     return io_generic_write(dbh, ci);
 }
 
@@ -2087,6 +2091,7 @@ static int io_library_write(void *dbh, cached_item *ci) {
     GIOVec vec[2];
 
     assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
 
     fmt[0] = GT_Library;
     fmt[1] = (lib->name ? 1 : 0) | (io->comp_mode << 6);
@@ -2137,20 +2142,31 @@ static cached_item *io_vector_read(void *dbh, tg_rec rec) {
  */
 static char *pack_rng_array(int comp_mode, int fmt,
 			    GRange *rng, int nr, int *sz) {
+    /* Parts:
+     * 0 start
+     * 1 end
+     * 2 rec
+     * 3 mqual
+     * 4 flags
+     * 5 pair_rec
+     * 6 start_nth
+     * 7 end_nth
+     */
     int i;
-    size_t part_sz[7];
+    size_t part_sz[9];
     GRange last, last_tag;
-    unsigned char *cp[6], *cp_orig[6], *out;
+    unsigned char *cp[8], *cp_orig[8], *out;
     char *out_orig;
     //char *cpt, *cpt_orig;
     //HacheTable *h = HacheTableCreate(16, HASH_DYNAMIC_SIZE);
     //int ntags;
+    int nparts = fmt >= 2 ? 8 : 6;
 
     memset(&last, 0, sizeof(last));
     memset(&last_tag, 0, sizeof(last_tag));
 
     /* Pack the 6 structure elements to their own arrays */
-    for (i = 0; i < 6; i++)
+    for (i = 0; i < nparts; i++)
 	cp[i] = cp_orig[i] = malloc(nr * 10);
 
     for (i = 0; i < nr; i++) {
@@ -2176,11 +2192,11 @@ static char *pack_rng_array(int comp_mode, int fmt,
 	}
 
 	if (fmt == 0) {
-	    cp[0] += int2u7(r.start, cp[0]);
-	    cp[1] += int2u7(r.end,   cp[1]);
+	    cp[0] += int2u7(r.start,          cp[0]);
+	    cp[1] += int2u7(r.end,            cp[1]);
 	    cp[2] += int2u7((int32_t)r.rec,   cp[2]);
-	    cp[3] += int2u7(r.mqual, cp[3]);
-	    cp[4] += int2u7(r.flags, cp[4]);
+	    cp[3] += int2u7(r.mqual,          cp[3]);
+	    cp[4] += int2u7(r.flags,          cp[4]);
 
 	    if ((r.flags & GRANGE_FLAG_ISMASK) == GRANGE_FLAG_ISANNO) {
 		if (!(r.flags & GRANGE_FLAG_TYPE_SINGLE))
@@ -2192,11 +2208,15 @@ static char *pack_rng_array(int comp_mode, int fmt,
 		last = rng[i];
 	    }
 	} else {
-	    cp[0] += int2s7 (r.start, cp[0]);
-	    cp[1] += int2u7 (r.end,   cp[1]);
-	    cp[2] += intw2s7(r.rec,   cp[2]);
-	    cp[3] += int2u7 (r.mqual, cp[3]);
-	    cp[4] += int2u7 (r.flags, cp[4]);
+	    cp[0] += int2s7 (r.start,     cp[0]);
+	    cp[1] += int2u7 (r.end,       cp[1]);
+	    cp[2] += intw2s7(r.rec,       cp[2]);
+	    cp[3] += int2u7 (r.mqual,     cp[3]);
+	    cp[4] += int2u7 (r.flags,     cp[4]);
+	    if (fmt >= 2) {
+		cp[6] += int2u7(r.start_nth, cp[6]);
+		cp[7] += int2u7(r.end_nth,   cp[7]);
+	    }
 
 	    if ((r.flags & GRANGE_FLAG_ISMASK) == GRANGE_FLAG_ISANNO) {
 		if (!(r.flags & GRANGE_FLAG_TYPE_SINGLE))
@@ -2210,22 +2230,24 @@ static char *pack_rng_array(int comp_mode, int fmt,
 	}
     }
 
-    for (i = 0; i < 6; i++)
+    for (i = 0; i < nparts; i++)
 	part_sz[i+1] = cp[i]-cp_orig[i];
 
     /* Construct a header with nr and the size of the 6 packed struct fields */
     *sz =  7*5 + part_sz[1] + part_sz[2] + part_sz[3] +
 	part_sz[4] + part_sz[5] + part_sz[6];
+    if (fmt >= 2)
+	*sz += part_sz[7] + part_sz[8];
 
     out = malloc(*sz);
     out_orig = (char *)out;
     out += int2u7(nr, out);
-    for (i = 0; i < 6; i++)
+    for (i = 0; i < nparts; i++)
 	out += int2u7(cp[i]-cp_orig[i], out);
     part_sz[0] = (char *)out-out_orig;
 
     /* Followed by the serialised 6 packed fields themselves */
-    for (i = 0; i < 6; i++) {
+    for (i = 0; i < nparts; i++) {
 	int len = cp[i]-cp_orig[i];
 	memcpy(out, cp_orig[i], len);
 	out += len;
@@ -2259,11 +2281,12 @@ static char *pack_rng_array(int comp_mode, int fmt,
 static GRange *unpack_rng_array(int comp_mode, int fmt,
 				unsigned char *packed,
 				int packed_sz, int *nr) {
-    uint32_t i, off[6];
-    int32_t i32;
-    unsigned char *cp[6], *zpacked = NULL;
+    uint32_t i, off[8];
+    uint32_t i32;
+    unsigned char *cp[8], *zpacked = NULL;
     GRange last, *r, *ls = &last, *lt = &last;
     size_t ssz;
+    int nparts = 8;
 
     /* First of all, inflate the compressed data */
     zpacked = packed = (unsigned char *)mem_inflate(comp_mode,
@@ -2274,18 +2297,21 @@ static GRange *unpack_rng_array(int comp_mode, int fmt,
     /* Unpack number of ranges */
     packed += u72int(packed, (uint32_t *)nr);
 
-    /* Unpack offsets of the 6 range components */
-    for (i = 0; i < 6; i++) 
+    /* Unpack offsets of the 8 range components */
+    if (fmt < 2)
+	nparts = 6;
+
+    for (i = 0; i < nparts; i++) 
 	packed += u72int(packed, &off[i]);
     cp[0] = packed;
-    for (i = 1; i < 6; i++)
+    for (i = 1; i < nparts; i++)
 	cp[i] = cp[i-1] + off[i-1];
 
     r = (GRange *)malloc(*nr * sizeof(*r));
     memset(ls, 0, sizeof(*ls));
     memset(lt, 0, sizeof(*lt));
 
-    /* And finally unpack from the 6 components in parallel for each struct */
+    /* And finally unpack from the 8 components in parallel for each struct */
     for (i = 0; i < *nr; i++) {
 	r[i].y = 0;
 
@@ -2372,10 +2398,21 @@ static GRange *unpack_rng_array(int comp_mode, int fmt,
 
 		ls = &r[i];
 	    }
+
+	    if (nparts >= 8) {
+		cp[6] += u72int(cp[6], (int32_t *)&r[i].start_nth);
+		cp[7] += u72int(cp[7], (int32_t *)&r[i].end_nth);
+	    } else {
+		r[i].start_nth = 0;
+		r[i].end_nth   = 0;
+	    }
+	    printf("%d\tr[%d] = %d+%d / %d+%d\n",
+		   r[i].flags,
+		   i, r[i].start, r[i].start_nth, r[i].end, r[i].end_nth);
 	}
     }
 
-    assert(cp[5] - zpacked == packed_sz);
+    assert(cp[nparts-1] - zpacked == packed_sz);
 
     if (zpacked)
 	free(zpacked);
@@ -2542,7 +2579,7 @@ static cached_item *io_bin_read(void *dbh, tg_rec rec) {
 	    g_read(io, v, buf, vi.used);
 	    fmt = buf[1] & 0x3f;
 	    assert(buf[0] == GT_Range);
-	    assert(fmt <= 1);
+	    assert(fmt <= 2);
 	    comp_mode = ((unsigned char)buf[1]) >> 6;
 	    r = unpack_rng_array(comp_mode, fmt, buf+2, vi.used-2, &nranges);
 	    free(buf);
@@ -2609,7 +2646,7 @@ static int io_bin_write_view(g_io *io, bin_index_t *bin, GView v) {
 	char *cp, fmt[2];
 	int sz;
 	GIOVec vec[2];
-	int fmt2 = 1;
+	int fmt2 = 2;
 
 	fmt[0] = GT_Range;
 	fmt[1] = fmt2 | (io->comp_mode << 6);
@@ -2788,9 +2825,10 @@ static int io_bin_write_view(g_io *io, bin_index_t *bin, GView v) {
 
 static int io_bin_write(void *dbh, cached_item *ci) {
     g_io *io = (g_io *)dbh;
-    bin_index_t *bin = (bin_index_t *)&ci->data;
+    bin_index_t *bin = (bin_index_t *)(char*)&ci->data;
 
     assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
     return io_bin_write_view(io, bin, ci->view);
 }
 
@@ -2875,11 +2913,12 @@ static int io_bin_destroy(void *dbh, tg_rec r, GView v) {
 
     if (!(bflag & BIN_NO_RANGE)) {
 	GView rv;
+	uint64_t i64;
 
 	cp += u72int(cp, (uint32_t *)&g.start);
 	cp += u72int(cp, (uint32_t *)&g.end);
 	g.end += g.start;
-	cp += u72int(cp, (uint32_t *)&g.range);
+	cp += u72intw(cp, &i64); g.range = i64;
 
 	rv = lock(io, (int)g.range, G_LOCK_RW);
 	deallocate(io, (int)g.range, rv);
@@ -3026,6 +3065,7 @@ static int io_track_write(void *dbh, cached_item *ci) {
     track_t *track = (track_t *)&ci->data;
 
     assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
     return io_track_write_view(io, track, ci->view);
 }
 
@@ -3179,12 +3219,12 @@ static cached_item *seq_decode(unsigned char *buf, size_t len, tg_rec rec) {
     cp += seq->trace_name_len + 1;
 
     /* Alignment */
-    seq->alignment = seq->trace_name + seq->trace_name_len + 1;
-    seq->alignment_len = strlen(seq->alignment);
+    seq->alignment = (unsigned char *)seq->trace_name + seq->trace_name_len+1;
+    seq->alignment_len = strlen((char *)seq->alignment);
     cp += seq->alignment_len + 1;
 
     /* Seq/Qual */
-    seq->seq = seq->alignment + seq->alignment_len + 1;
+    seq->seq = (char *)seq->alignment + seq->alignment_len + 1;
     seq->conf = seq->seq + seq_len;
 
     /* SAM Aux - not supported in old single-seq mode */
@@ -3431,7 +3471,7 @@ static int io_seq_write_view(g_io *io, seq_t *seq, GView v, tg_rec rec) {
     cp += int2u7(0, cp); /* match of length zero */
   }
 #else
-    strcpy((char *)cp, seq->alignment);
+    strcpy((char *)cp, (char *)seq->alignment);
     cp += seq->alignment_len + 1;
 #endif
 
@@ -3498,6 +3538,7 @@ static int io_seq_write(void *dbh, cached_item *ci) {
     seq_t *seq = (seq_t *)&ci->data;
 
     assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
     return io_seq_write_view(io, seq, ci->view, (GRec)ci->rec);
 }
 
@@ -3868,7 +3909,8 @@ static cached_item *io_seq_block_read(void *dbh, tg_rec rec) {
     /* Alignment strings (unused at present) */
     for (i = 0; i < SEQ_BLOCK_SZ; i++) {
 	if (!b->seq[i]) continue;
-	b->seq[i]->alignment = b->seq[i]->trace_name + b->seq[i]->trace_name_len + 1;
+	b->seq[i]->alignment = (unsigned char *)b->seq[i]->trace_name
+	    + b->seq[i]->trace_name_len + 1;
 	memcpy(b->seq[i]->alignment, cp, b->seq[i]->alignment_len);
 	cp += b->seq[i]->alignment_len;
 	b->seq[i]->alignment[b->seq[i]->alignment_len] = 0;
@@ -3877,7 +3919,8 @@ static cached_item *io_seq_block_read(void *dbh, tg_rec rec) {
     /* Sequence */
     for (i = 0; i < SEQ_BLOCK_SZ; i++) {
 	if (!b->seq[i]) continue;
-	b->seq[i]->seq = b->seq[i]->alignment + b->seq[i]->alignment_len + 1;
+	b->seq[i]->seq = (char *)b->seq[i]->alignment
+	    + b->seq[i]->alignment_len + 1;
 	memcpy(b->seq[i]->seq, cp, ABS(b->seq[i]->len));
 	if (b->seq[i]->len < 0)
 	    complement_seq(b->seq[i]->seq, -b->seq[i]->len);
@@ -3961,6 +4004,9 @@ static int io_seq_block_write(void *dbh, cached_item *ci) {
     int nparts = 19;
     int first_seq = -1;
     int wide_recs = sizeof(tg_rec) > sizeof(uint32_t);
+
+    assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
 
     set_dna_lookup();
 
@@ -4072,7 +4118,7 @@ static int io_seq_block_write(void *dbh, cached_item *ci) {
 	}
 
 	/* Alignment */
-	s->alignment_len = 0; /* this is unused for now */
+	//s->alignment_len = 0; /* this is unused for now */
 	out[11] += int2u7(s->alignment_len, out[11]);
 	memcpy(out[14], s->alignment, s->alignment_len);
 	out[14] += s->alignment_len;
@@ -4425,6 +4471,9 @@ static int io_anno_ele_block_write(void *dbh, cached_item *ci) {
     int level[7];
     GIOVec vec[2];
     char fmt[2];
+
+    assert(ci->lock_mode >= G_LOCK_RW);
+    assert(ci->rec > 0);
 
     /* Compute worst-case sizes, for memory allocation */
     for (i = 0; i < 7; i++) {

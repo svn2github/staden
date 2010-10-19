@@ -1106,6 +1106,8 @@ static int contig_seqs_in_range2(GapIO *io, tg_rec bin_num,
 		    (*results)[count].start = en;
 		    (*results)[count].end   = st;
 		}
+		(*results)[count].start_nth = l->start_nth;
+		(*results)[count].end_nth = l->end_nth;
 		(*results)[count].comp  = complement;
 		(*results)[count].mqual = l->mqual;
 		(*results)[count].pair_rec   = l->pair_rec;

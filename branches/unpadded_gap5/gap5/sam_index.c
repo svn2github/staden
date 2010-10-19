@@ -1431,10 +1431,10 @@ int bio_add_unmapped(bam_io_t *bio, bam1_t *b) {
     s.trace_name = s.name + s.name_len + 1;
     *s.trace_name = 0;
     s.trace_name_len = 0;
-    s.alignment = s.trace_name + s.trace_name_len + 1;
+    s.alignment = (unsigned char *)s.trace_name + s.trace_name_len + 1;
     *s.alignment = 0;
     s.alignment_len = 0;
-    s.seq = s.alignment + s.alignment_len+1;
+    s.seq = (char *)s.alignment + s.alignment_len+1;
     s.conf = s.seq+s.len;
     s.mapping_qual = b->core.qual;
     s.format = SEQ_FORMAT_MAQ; /* pack bytes */
@@ -1500,7 +1500,7 @@ int bio_add_unmapped(bam_io_t *bio, bam1_t *b) {
 
     flags |= GRANGE_FLAG_ISUMSEQ;
 
-    recno = save_range_sequence(bio->io, &s, s.mapping_qual, bio->pair,
+    recno = save_range_sequence(bio->io, &s, 0, 0, s.mapping_qual, bio->pair,
     				is_pair, tname, bio->c, bio->a, flags, lib);
 
 
@@ -1648,10 +1648,10 @@ int bio_del_seq(bam_io_t *bio, const bam_pileup1_t *p, int snum) {
     s.trace_name = s.name + s.name_len + 1;
     *s.trace_name = 0;
     s.trace_name_len = 0;
-    s.alignment = s.trace_name + s.trace_name_len + 1;
+    s.alignment = (unsigned char *)s.trace_name + s.trace_name_len + 1;
     *s.alignment = 0;
     s.alignment_len = 0;
-    s.seq = s.alignment + s.alignment_len+1;
+    s.seq = (char *)s.alignment + s.alignment_len+1;
     s.conf = s.seq+s.len;
     s.mapping_qual = b->core.qual;
     s.format = SEQ_FORMAT_MAQ; /* pack bytes */
@@ -1716,7 +1716,7 @@ int bio_del_seq(bam_io_t *bio, const bam_pileup1_t *p, int snum) {
 
     if (bio->pair) is_pair = 1;
 
-    recno = save_range_sequence(bio->io, &s, s.mapping_qual, bio->pair,
+    recno = save_range_sequence(bio->io, &s, 0, 0, s.mapping_qual, bio->pair,
     				is_pair, tname, bio->c, bio->a, flags, lib);
 
 
@@ -1796,7 +1796,7 @@ int bio_del_seq(bam_io_t *bio, const bam_pileup1_t *p, int snum) {
 }
 
 /*
- * Adds a base to a sequence in the bio_io_t struct.
+ * Adds a base to a sequence in the bam_io_t struct.
  * Returns 0 on success
  *        -1 on failure
  */

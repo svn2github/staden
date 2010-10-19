@@ -662,7 +662,7 @@ static int EditorWidgetCmd(ClientData clientData, Tcl_Interp *interp,
      */
     case _GET_NUMBER: {
 	char buf[100];
-	int x, y, type, pos;
+	int x, y, type, pos, nth;
 	tg_rec rec;
 
 	if (argc != 2 && !(argc >= 4 && argc <= 6)) {
@@ -679,15 +679,16 @@ static int EditorWidgetCmd(ClientData clientData, Tcl_Interp *interp,
 	    sheet_arg_y(TKSHEET(ed), argv[3], &y); y++;
 
 	    if (-1 != (type = edview_item_at_pos(ed->xx, y, x, 0, exact,
-						 seq_only, &rec, &pos))) {
-		sprintf(buf, "%d %"PRIrec" %d", type, rec, pos);
+						 seq_only, &rec, &pos, &nth))) {
+		sprintf(buf, "%d %"PRIrec" %d %d", type, rec, pos, nth);
 		Tcl_AppendResult(interp, buf, NULL);
 	    } /* otherwise return a blank */
 	} else {
-	    sprintf(buf, "%d %"PRIrec" %d",
+	    sprintf(buf, "%d %"PRIrec" %d %d",
 		    ed->xx->cursor_type,
 		    ed->xx->cursor_rec,
-		    ed->xx->cursor_pos);
+		    ed->xx->cursor_pos,
+		    ed->xx->cursor_nth);
 	    Tcl_AppendResult(interp, buf, NULL);
 	}
 	break;
@@ -733,18 +734,21 @@ static int EditorWidgetCmd(ClientData clientData, Tcl_Interp *interp,
     /* Sets the editor cursor position */
     case _SET_CURSOR: {
 	int visible = 1;
-	if (argc != 5 && argc != 6) {
+	int nth = 0;
+	if (argc < 5 || argc > 7) {
 	    Tcl_AppendResult(interp, "wrong # args: should be \"",
 			     argv[0], " set_cursor rec_type rec_no position"
-			     " ?make_visible?\"",
+			     " ?nth? ?make_visible?\"",
 			     (char *) NULL);
 	    goto fail;
 	}
 
 	if (argc >= 6)
-	    Tcl_GetInt(interp, argv[5], &visible);
+	    Tcl_GetInt(interp, argv[5], &nth);
+	if (argc >= 7)
+	    Tcl_GetInt(interp, argv[6], &visible);
 	edSetCursorPos(ed->xx, atoi(argv[2]), atorec(argv[3]), atoi(argv[4]),
-		       visible);
+		       nth, visible);
 	break;
     }
 
@@ -758,11 +762,13 @@ static int EditorWidgetCmd(ClientData clientData, Tcl_Interp *interp,
 	}
 
 	if (*argv[2] == 'a')
-	    vTcl_SetResult(interp, "%d %d %d",
-			   GT_Contig, xx->cnum, xx->cursor_apos);
+	    vTcl_SetResult(interp, "%d %d %d %d",
+			   GT_Contig, xx->cnum, xx->cursor_apos,
+			   xx->cursor_anth);
 	else
-	    vTcl_SetResult(interp, "%d %d %d",
-			   xx->cursor_type, xx->cursor_rec, xx->cursor_pos);
+	    vTcl_SetResult(interp, "%d %d %d %d",
+			   xx->cursor_type, xx->cursor_rec, xx->cursor_pos,
+			   xx->cursor_nth);
 	
 	break;
     }
@@ -848,25 +854,27 @@ static int EditorWidgetCmd(ClientData clientData, Tcl_Interp *interp,
     case _GET_SEQ_STATUS: {
 	char *msg;
 
-	if (argc != 6) {
+	if (argc != 7) {
 	    Tcl_AppendResult(interp, "wrong # args: should be \"",
 			     argv[0], " get_seq_status rec_type rec_no"
-			              " position format\"",
+			              " position nth format\"",
 			     (char *) NULL);
 	    goto fail;
 	}
 
 	switch (atoi(argv[2])) {
 	case GT_Seq:
-	    msg = edGetBriefSeq(ed->xx, atorec(argv[3]), atoi(argv[4]), argv[5]);
+	    msg = edGetBriefSeq(ed->xx, atorec(argv[3]), atoi(argv[4]),
+				atoi(argv[5]), argv[6]);
 	    break;
 
 	case GT_Contig:
-	    msg = edGetBriefCon(ed->xx, atorec(argv[3]), atoi(argv[4]), argv[5]);
+	    msg = edGetBriefCon(ed->xx, atorec(argv[3]), atoi(argv[4]),
+				atoi(argv[5]), argv[6]);
 	    break;
 
 	case GT_AnnoEle:
-	    msg = edGetBriefTag(ed->xx, atorec(argv[3]), argv[5]);
+	    msg = edGetBriefTag(ed->xx, atorec(argv[3]), argv[6]);
 	    break;
 
 	default:
@@ -1030,66 +1038,75 @@ static int EditorWidgetCmd(ClientData clientData, Tcl_Interp *interp,
 	    }
 	    edSelectClear(ed->xx);
 	} else if (index == TO || index == FROM) {
-	    int arg;
-	    if (argc != 4) {
+	    int pos, nth;
+	    if (argc != 5) {
 		Tcl_AppendResult(interp, "wrong # args: should be \"",
 				 argv[0], " select ",
 				 index == TO ? "to" : "from",
-				 " arg\"",
+				 " pos nth\"",
 				 (char *) NULL);
 		goto fail;
 	    }
 
-	    sheet_arg_x(TKSHEET(ed), argv[3], &arg);
+	    sheet_arg_x(TKSHEET(ed), argv[3], &pos);
+	    sheet_arg_x(TKSHEET(ed), argv[4], &nth);
 	    if (index == TO) {
-		edSelectTo(ed->xx, arg);
+		edSelectTo(ed->xx, pos, nth);
 	    } else {
-		edSelectFrom(ed->xx, arg);
+		edSelectFrom(ed->xx, pos, nth);
 	    }
 	    
 	} else if (index == GET) {
 	    if (ed->xx->select_seq) {
-		vTcl_SetResult(interp, "%d %d %d %d",
+		vTcl_SetResult(interp, "%d %d %d %d %d %d",
 			       ed->xx->select_seq == ed->xx->cnum
 			       ? GT_Contig
 			       : GT_Seq,
 			       ed->xx->select_seq,
 			       ed->xx->select_start,
-			       ed->xx->select_end);
+			       ed->xx->select_start_nth,
+			       ed->xx->select_end,
+			       ed->xx->select_end_nth);
 	    } else {
 		/* The base under the editing cursor */
-		vTcl_SetResult(interp, "%d %d %d %d",
+		vTcl_SetResult(interp, "%d %d %d %d %d %d",
 			       ed->xx->cursor_rec == ed->xx->cnum
 			       ? GT_Contig
 			       : GT_Seq,
 			       ed->xx->cursor_rec,
 			       ed->xx->cursor_pos,
-			       ed->xx->cursor_pos);
+			       ed->xx->cursor_nth,
+			       ed->xx->cursor_pos,
+			       ed->xx->cursor_nth);
 	    }
 
 	} else if (index == SET) {
 	    tg_rec rn = ed->xx->cnum;
-	    int bs = 0;
-	    int be = 0;
+	    int bs = 0, ns = 0;
+	    int be = 0, ne = 0;
 
-	    if (argc != 5 && argc != 6) {
+	    if (argc != 7 && argc != 8) {
 		Tcl_AppendResult(interp, "wrong # args: should be \"",
 				 argv[0], " select set ",
-				 " ?rec_num? base_start base_end\"",
+				 " ?rec_num? base_start nth base_end nth\"",
 				 (char *) NULL);
 		goto fail;
 	    }
 
-	    if (argc == 5) {
+	    if (argc == 7) {
 		bs = atoi(argv[3]);
-		be = atoi(argv[4]);
+		ns = atoi(argv[4]);
+		be = atoi(argv[5]);
+		ne = atoi(argv[6]);
 	    } else {
 		rn = atorec(argv[4]);
 		bs = atoi(argv[5]);
-		be = atoi(argv[6]);
+		ns = atoi(argv[6]);
+		be = atoi(argv[7]);
+		ne = atoi(argv[8]);
 	    }
 
-	    edSelectSet(ed->xx, rn, bs, be);
+	    edSelectSet(ed->xx, rn, bs, ns, be, ne);
 
 	} else {
 	    Tcl_AppendResult(interp, "wrong sub-command: should be "

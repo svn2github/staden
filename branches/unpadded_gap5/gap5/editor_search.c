@@ -150,7 +150,7 @@ int edview_search_sequence(edview *xx, int dir, int strand, char *value) {
 
     if (found) {
 	edSetCursorPos(xx, fseq == xx->contig->rec ? GT_Contig : GT_Seq,
-		       fseq, fpos, 1);
+		       fseq, fpos, 0, 1);
     }
 
     free(uppert);
@@ -217,7 +217,7 @@ int edview_search_consquality(edview *xx, int dir, int strand, char *value) {
     } while (!at_end);
 
     if (found) {
-	edSetCursorPos(xx, GT_Contig, xx->contig->rec, fpos, 1);
+	edSetCursorPos(xx, GT_Contig, xx->contig->rec, fpos, 0, 1);
 	return 0;
     }
 
@@ -315,7 +315,7 @@ int edview_search_name(edview *xx, int dir, int strand, char *value)
 	free(rp);
     
     if (best_rec != -1) {
-	edSetCursorPos(xx, GT_Seq, best_rec, 0, 1);
+	edSetCursorPos(xx, GT_Seq, best_rec, 0, 0, 1);
 	return 0;
     }
 
@@ -357,9 +357,9 @@ int edview_search_tag_type(edview *xx, int dir, int strand, char *value) {
 	    int pos;
 	    sequence_get_position(xx->io, r->pair_rec, NULL, &pos, NULL, NULL);
 	    pos = r->start - pos;
-	    edSetCursorPos(xx, GT_Seq, r->pair_rec, pos, 1);
+	    edSetCursorPos(xx, GT_Seq, r->pair_rec, pos, 0, 1);
 	} else {
-	    edSetCursorPos(xx, GT_Contig, xx->cnum, r->start, 1);
+	    edSetCursorPos(xx, GT_Contig, xx->cnum, r->start, 0, 1);
 	}
 	contig_iter_del(iter);
 	return 0;
@@ -422,9 +422,9 @@ int edview_search_tag_anno(edview *xx, int dir, int strand, char *value) {
 	    int pos;
 	    sequence_get_position(xx->io, r->pair_rec, NULL, &pos, NULL, NULL);
 	    pos = r->start - pos;
-	    edSetCursorPos(xx, GT_Seq, r->pair_rec, pos, 1);
+	    edSetCursorPos(xx, GT_Seq, r->pair_rec, pos, 0,1);
 	} else {
-	    edSetCursorPos(xx, GT_Contig, xx->cnum, r->start, 1);
+	    edSetCursorPos(xx, GT_Contig, xx->cnum, r->start, 0, 1);
 	}
 	contig_iter_del(iter);
 	return 0;
