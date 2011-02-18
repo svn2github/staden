@@ -60,6 +60,7 @@ typedef struct {
     tg_rec track;
     GCardinal nseqs;
     GCardinal rng_free; /* forms a linked list of items in rng that are free */
+    GCardinal ref_pos;
 } GBin;
 
 typedef struct {
@@ -71,6 +72,7 @@ typedef struct {
     GCardinal flags; /* see below */
     /* Move library here? */
     GCardinal y; /* Not stored on disc, just cached */
+    GCardinal ref_start, ref_end; /* ref coords */
 } GRange; /* An element of the bin->rng record */
 
 
@@ -280,6 +282,7 @@ typedef struct index {
     tg_rec track_rec;
     int nseqs;
     int rng_free; /* forms a linked list of items in rng that are free */
+    int ref_pos;  /* mapping of padded pos to ref pos for start of bin */
 } bin_index_t;
 
 /* Bit flags for bin_index_t.flags */
@@ -340,6 +343,8 @@ typedef struct {
 
     tg_rec orig_rec; /* From bin record and index into bin->rng array. */
     int orig_ind;    /*    Used to update cached range_t->y field. */
+
+    int ref_start, ref_end;
 } rangec_t;
 
 /* This is binary compatible with the GRange type */
@@ -352,6 +357,7 @@ typedef struct {
     int    flags;
     /* Move library here? */
     int    y; /* Not stored on disc, just cached */
+    int ref_start, ref_end;
 } range_t;
 
 /* Decoded from GTrack_header above */

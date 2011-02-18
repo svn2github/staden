@@ -639,6 +639,13 @@ int sequence_get_position(GapIO *io, tg_rec snum, tg_rec *contig,
 				 NULL, NULL);
 }
 
+int sequence_get_ref_position(GapIO *io, tg_rec snum, tg_rec *contig,
+			      int *start, int *end, int *orient) {
+    return bin_get_item_ref_position(io, GT_Seq, snum,
+				     contig, start, end, orient, NULL,
+				     NULL, NULL);
+}
+
 /*
  * Invalidates the cached consensus for this sequence.
  *

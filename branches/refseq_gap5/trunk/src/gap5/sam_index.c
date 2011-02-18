@@ -30,6 +30,8 @@ typedef struct bio_seq {
     int alloc_len;
     int mqual;
     int pos;
+    int ref_pos;
+    int ref_end;
     int left;
     tg_rec rec;
 } bio_seq_t;
@@ -177,7 +179,7 @@ int stech_guess_by_name(char *str) {
  * Returns the bio_seq_t * on success
  *         NULL on failure
  */
-bio_seq_t *bio_new_seq(bam_io_t *bio, pileup_t *p, int pos) {
+bio_seq_t *bio_new_seq(bam_io_t *bio, pileup_t *p, int pos, int ref_pos) {
     int i;
     bio_seq_t *s;
 
@@ -263,6 +265,8 @@ bio_seq_t *bio_new_seq(bam_io_t *bio, pileup_t *p, int pos) {
 
     s->seq_len = i;
     s->pos = pos - i;
+    s->ref_pos = ref_pos - i;
+    s->ref_end = ref_pos - i;
     s->left = i;
 
     if (bio->a->data_type == DATA_BLANK) {
@@ -1246,7 +1250,7 @@ int bio_add_unmapped(bam_io_t *bio, bam_seq_t *b) {
  * Returns 0 on success
  *        -1 on failure
  */
-int bio_del_seq(bam_io_t *bio, pileup_t *p) {
+int bio_del_seq(bam_io_t *bio, pileup_t *p, int ref_pos) {
     bio_seq_t *bs = (bio_seq_t *)p->cd;
     bam_seq_t *b;
     seq_t s;
@@ -1305,6 +1309,7 @@ int bio_del_seq(bam_io_t *bio, pileup_t *p) {
 
     /* Construct a seq_t struct */
     s.right = bs->seq_len;
+    bs->ref_end = ref_pos;
     if (p->seq_offset+1 < b->len) {
 	unsigned char *b_seq  = (unsigned char *)bam_seq(p->b);
 	unsigned char *b_qual = (unsigned char *)bam_qual(p->b);
@@ -1320,6 +1325,7 @@ int bio_del_seq(bam_io_t *bio, pileup_t *p) {
 	    bs->seq [bs->seq_len] = bam_nt16_rev_table[bam_seqi(b_seq,i)];
 	    bs->conf[bs->seq_len] = b_qual[i];
 	    bs->seq_len++;
+	    bs->ref_end++;
 	}
     }
     
@@ -1433,8 +1439,9 @@ int bio_del_seq(bam_io_t *bio, pileup_t *p) {
 
     if (bio->pair) is_pair = 1;
 
-    recno = save_range_sequence(bio->io, &s, s.mapping_qual, bio->pair,
-    				is_pair, tname, bio->c, bio->a, flags, lib);
+    recno = save_range_sequence_ref(bio->io, &s, s.mapping_qual, bio->pair,
+				    is_pair, tname, bio->c, bio->a, flags,
+				    lib, bs->ref_pos, bs->ref_end);
 
 
 #ifdef SAM_AUX_AS_TAG
@@ -1513,6 +1520,57 @@ int bio_del_seq(bam_io_t *bio, pileup_t *p) {
 
     return 0;
 }
+
+#if 0
+/*
+ * Process pileup_t in blocks of N_PILEUPS at a time.
+ * This allows us to sort them and add to bin ranges in left end
+ * position rather than right end.
+ *
+ * The net effect is that with sequences of variable size (eg 454) we can
+ * save 2-3% of our storage costs and 4% slower.
+ * Is it worth it? I'm not sure. It can be toggled by selecting
+ * bio_del_seq_delayed() vs bio_del_seq() calls in sam_add_seq().
+ */
+#define N_PILEUPS 5000
+static pileup_t pstore[N_PILEUPS];
+static int pstore_used = 0;
+
+static int pstore_sort(const void *v1, const void *v2) {
+    const pileup_t *p1 = v1, *p2 = v2;
+    bio_seq_t *b1 = (bio_seq_t *)p1->cd;
+    bio_seq_t *b2 = (bio_seq_t *)p2->cd;
+
+    if (b1->pos < b2->pos)
+	return -1;
+    else if (b1->pos > b2->pos)
+	return +1;
+    return p1 - p2;
+}
+
+static int bio_del_seq_flush(bam_io_t *bio) {
+    int i, ret = 0;
+
+    qsort(pstore, pstore_used, sizeof(pstore[0]), pstore_sort);
+    for (i = 0; i < pstore_used; i++) {
+	ret |= bio_del_seq(bio, &pstore[i], 0);
+	free(pstore[i].b);
+    }
+    pstore_used = 0;
+
+    return ret;
+}
+
+static int bio_del_seq_delayed(bam_io_t *bio, pileup_t *p) {
+    pstore[pstore_used++] = *p;
+    p->b = NULL;
+    if (pstore_used == N_PILEUPS) {
+	return bio_del_seq_flush(bio);
+    }
+
+    return 0;
+}
+#endif
 
 /*
  * Called once per sequence as they're discovered
@@ -1641,7 +1699,7 @@ static int sam_add_seq(void *cd, bam_file_t *fp, pileup_t *p,
 		  get_padded_coord(bio->tree,
 				   pos + bio->n_inserts - bio->npads)
 		: pos + bio->n_inserts;
-	    p->cd = s = bio_new_seq(bio, p, ppos);
+	    p->cd = s = bio_new_seq(bio, p, ppos, pos);
 	}
 
 	s = (bio_seq_t *)p->cd;
@@ -1669,7 +1727,8 @@ static int sam_add_seq(void *cd, bam_file_t *fp, pileup_t *p,
 	/* Remove sequence */
 	if (p->eof) {
 	    //printf("End seq %s\n", bam_name(p->b));
-	    bio_del_seq(bio, p);
+	    //bio_del_seq_delayed(bio, p); /* See comments above func */
+	    bio_del_seq(bio, p, pos);
 	}
     }
     if (nth)
@@ -1716,6 +1775,8 @@ int parse_sam_or_bam(GapIO *io, char *fn, tg_args *a, char *mode) {
     /* The main processing loop, calls sam_add_seq() */
     pileup_loop(fp, sam_check_unmapped, sam_add_seq, bio);
     //pileup_loop(fp, NULL, sam_add_seq, bio);
+
+    //bio_del_seq_flush(bio);
 
     //    if (bio->rg2pl_hash)
     //	sam_tbl_destroy(bio->rg2pl_hash);

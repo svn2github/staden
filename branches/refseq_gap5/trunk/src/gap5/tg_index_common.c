@@ -684,7 +684,65 @@ tg_rec save_range_sequence(GapIO *io, seq_t *seq, uint8_t mapping_qual,
     
     return recno;
 }
+
+
+tg_rec save_range_sequence_ref(GapIO *io, seq_t *seq, uint8_t mapping_qual,
+			       tg_pair_t *pair, int is_pair, char *tname,
+			       contig_t *c, tg_args *a, int flags,
+			       library_t *lib, int ref_pos, int ref_end) {
+    range_t r, *r_out;
+    tg_rec recno;
+    bin_index_t *bin;
+    static tg_rec fake_recno = 1;
+    int comp;
+
+    /* Update sequence library, aka read-group */
+    if (lib && !seq->parent_type) {
+	seq->parent_type = GT_Library;
+	seq->parent_rec = lib->rec;
+    }
+
+    /* Create range */
+    r.start = seq->pos;
+    r.end   = seq->pos + ABS(seq->len)-1;
+    r.ref_start = ref_pos;
+    r.ref_end   = ref_end;
+    r.rec   = 0;
+    r.mqual = mapping_qual;
+    r.pair_rec = 0;
+    r.flags = flags;
+
+    /* Add the range to a bin, and see which bin it was */
+    bin = bin_add_range(io, &c, &r, &r_out, &comp, 1);
+
+    /* Save sequence */
+    if (a->data_type == DATA_BLANK) {
+	recno = fake_recno++;
+    } else {
+	if (comp) {
+	    complement_seq_t(seq);
+	    seq->len = -seq->len;
+	}
+
+	recno = save_sequence(io, seq, bin, r_out);
+    }
+
+    if (is_pair) {
+	find_pair(io, pair, recno, tname, bin, c, seq, a, r_out, lib);
+    }
+
+    if (a->tmp && (a->data_type & DATA_NAME))
+	bttmp_file_store(a->tmp, seq->name_len, seq->name, recno);
     
+    if (seq->data)
+	free(seq->data);
+
+    /* Link bin back to sequence too before it gets flushed */
+    r_out->rec = recno;
+    
+    return recno;
+}
+   
     
 
    

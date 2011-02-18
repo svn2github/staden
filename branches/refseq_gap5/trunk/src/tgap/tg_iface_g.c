@@ -2181,19 +2181,21 @@ static cached_item *io_vector_read(void *dbh, tg_rec rec) {
 static char *pack_rng_array(int comp_mode, int fmt,
 			    GRange *rng, int nr, int *sz) {
     int i;
-    size_t part_sz[7];
+    size_t part_sz[8];
     GRange last, last_tag;
-    unsigned char *cp[6], *cp_orig[6], *out;
+    unsigned char *cp[7], *cp_orig[7], *out;
     char *out_orig;
     //char *cpt, *cpt_orig;
     //HacheTable *h = HacheTableCreate(16, HASH_DYNAMIC_SIZE);
     //int ntags;
+    int r_diff, last_r_diff = 0, last_r_diff2 = 0;
+    int n_sec = fmt > 1 ? 7 : 6;
 
     memset(&last, 0, sizeof(last));
     memset(&last_tag, 0, sizeof(last_tag));
 
-    /* Pack the 6 structure elements to their own arrays */
-    for (i = 0; i < 6; i++)
+    /* Pack the 7 structure elements to their own arrays */
+    for (i = 0; i < n_sec; i++)
 	cp[i] = cp_orig[i] = malloc(nr * 10);
 
     for (i = 0; i < nr; i++) {
@@ -2207,6 +2209,20 @@ static char *pack_rng_array(int comp_mode, int fmt,
 	}
 	
 	//printf("%04d %d\t%d\t", i, r.rec, r.start);
+
+	if (fmt >= 2) {
+	    int r_diff = r.ref_start - r.start;
+
+	    printf("%d..%d vs %d..%d\n",
+		   r.start, r.end,
+		   r.ref_start, r.ref_end);
+
+	    cp[6] += int2s7(r_diff - last_r_diff, cp[6]);
+	    last_r_diff = r_diff;
+
+	    r_diff = r.ref_end - r.ref_start;
+	    cp[6] += int2s7(r_diff - (r.end - r.start), cp[6]);
+	}
 
 	if ((r.flags & GRANGE_FLAG_ISMASK) == GRANGE_FLAG_ISANNO) {
 	    r.end   -= r.start;
@@ -2253,22 +2269,22 @@ static char *pack_rng_array(int comp_mode, int fmt,
 	}
     }
 
-    for (i = 0; i < 6; i++)
-	part_sz[i+1] = cp[i]-cp_orig[i];
-
     /* Construct a header with nr and the size of the 6 packed struct fields */
-    *sz =  7*5 + part_sz[1] + part_sz[2] + part_sz[3] +
-	part_sz[4] + part_sz[5] + part_sz[6];
+    *sz = 8*5;
+    for (i = 0; i < n_sec; i++) {
+	part_sz[i+1] = cp[i]-cp_orig[i];
+	(*sz) += part_sz[i+1];
+    }
 
     out = malloc(*sz);
     out_orig = (char *)out;
     out += int2u7(nr, out);
-    for (i = 0; i < 6; i++)
+    for (i = 0; i < n_sec; i++)
 	out += int2u7(cp[i]-cp_orig[i], out);
     part_sz[0] = (char *)out-out_orig;
 
-    /* Followed by the serialised 6 packed fields themselves */
-    for (i = 0; i < 6; i++) {
+    /* Followed by the serialised 7 packed fields themselves */
+    for (i = 0; i < n_sec; i++) {
 	int len = cp[i]-cp_orig[i];
 	memcpy(out, cp_orig[i], len);
 	out += len;
@@ -2285,7 +2301,8 @@ static char *pack_rng_array(int comp_mode, int fmt,
 	if (*sz < 512)
 	    gzout = mem_deflate(comp_mode, out_orig, *sz, &ssz);
 	else
-	    gzout = mem_deflate_parts(comp_mode, out_orig, part_sz, 7, &ssz);
+	    gzout = mem_deflate_parts(comp_mode, out_orig, part_sz,
+				      n_sec+1, &ssz);
 	*sz = ssz;
 
     	free(out_orig);
@@ -2302,11 +2319,13 @@ static char *pack_rng_array(int comp_mode, int fmt,
 static GRange *unpack_rng_array(int comp_mode, int fmt,
 				unsigned char *packed,
 				int packed_sz, int *nr) {
-    uint32_t i, off[6];
+    uint32_t i, off[7];
     int32_t i32;
-    unsigned char *cp[6], *zpacked = NULL;
+    unsigned char *cp[7], *zpacked = NULL;
     GRange last, *r, *ls = &last, *lt = &last;
     size_t ssz;
+    int n_sec = fmt > 1 ? 7 : 6;
+    int32_t last_r_diff = 0;
 
     /* First of all, inflate the compressed data */
     zpacked = packed = (unsigned char *)mem_inflate(comp_mode,
@@ -2318,10 +2337,10 @@ static GRange *unpack_rng_array(int comp_mode, int fmt,
     packed += u72int(packed, (uint32_t *)nr);
 
     /* Unpack offsets of the 6 range components */
-    for (i = 0; i < 6; i++) 
+    for (i = 0; i < n_sec; i++) 
 	packed += u72int(packed, &off[i]);
     cp[0] = packed;
-    for (i = 1; i < 6; i++)
+    for (i = 1; i < n_sec; i++)
 	cp[i] = cp[i-1] + off[i-1];
 
     r = (GRange *)malloc(*nr * sizeof(*r));
@@ -2379,6 +2398,9 @@ static GRange *unpack_rng_array(int comp_mode, int fmt,
 
 		ls = &r[i];
 	    }
+
+	    r[i].ref_start = r[i].start;
+	    r[i].ref_end   = r[i].end;
 	} else {
 	    int64_t rec_tmp;
 	    cp[0] += s72int (cp[0], (int32_t *)&r[i].start);
@@ -2415,10 +2437,31 @@ static GRange *unpack_rng_array(int comp_mode, int fmt,
 
 		ls = &r[i];
 	    }
+
+	    if (fmt >= 2) {
+		int32_t r_diff;
+		cp[6] += s72int(cp[6], &r_diff);
+		r_diff += last_r_diff;
+		
+		r[i].ref_start = r_diff + r[i].start;
+
+		last_r_diff = r_diff;
+
+		cp[6] += s72int(cp[6], &r_diff);
+		r[i].ref_end = r_diff + (r[i].end - r[i].start)
+		    + r[i].ref_start;
+
+		printf("%d..%d vs %d..%d\n",
+		       r[i].start, r[i].end,
+		       r[i].ref_start, r[i].ref_end);
+	    } else {
+		r[i].ref_start = r[i].start;
+		r[i].ref_end   = r[i].end;
+	    }
 	}
     }
 
-    assert(cp[5] - zpacked == packed_sz);
+    assert(cp[n_sec-1] - zpacked == packed_sz);
 
     if (zpacked)
 	free(zpacked);
@@ -2470,6 +2513,7 @@ static cached_item *io_bin_read(void *dbh, tg_rec rec) {
 	g.track = 0;
 	g.nseqs = 0;
 	g.rng_free = -1;
+	g.ref_pos = 0;
 	goto empty_bin;
     }
     cp = buf;
@@ -2537,6 +2581,12 @@ static cached_item *io_bin_read(void *dbh, tg_rec rec) {
 	g.rng_free = -1;
     }
 
+    if (version > 1) {
+	cp += s72int(cp, &g.ref_pos);
+    } else {
+	g.ref_pos = 0;
+    }
+
  empty_bin:
     /*
     printf("<%d / p=%d+%d, %d..%d p=%d/%d, ch=%d/%d, id=%d, f=%d t=%d ns=%d r=%d\n",
@@ -2567,6 +2617,7 @@ static cached_item *io_bin_read(void *dbh, tg_rec rec) {
     bin->track       = NULL;
     bin->nseqs       = b->nseqs;
     bin->rng_free    = b->rng_free;
+    bin->ref_pos     = b->ref_pos;
 
     /* Load ranges */
     if (b->range) {
@@ -2585,7 +2636,7 @@ static cached_item *io_bin_read(void *dbh, tg_rec rec) {
 	    g_read(io, v, buf, vi.used);
 	    fmt = buf[1] & 0x3f;
 	    assert(buf[0] == GT_Range);
-	    assert(fmt <= 1);
+	    assert(fmt <= 2);
 	    comp_mode = ((unsigned char)buf[1]) >> 6;
 	    r = unpack_rng_array(comp_mode, fmt, buf+2, vi.used-2, &nranges);
 	    free(buf);
@@ -2652,7 +2703,7 @@ static int io_bin_write_view(g_io *io, bin_index_t *bin, GView v) {
 	char *cp, fmt[2];
 	int sz;
 	GIOVec vec[2];
-	int fmt2 = 1;
+	int fmt2 = 2;
 
 	fmt[0] = GT_Range;
 	fmt[1] = fmt2 | (io->comp_mode << 6);
@@ -2764,6 +2815,7 @@ static int io_bin_write_view(g_io *io, bin_index_t *bin, GView v) {
 	g.track       = bin->track_rec;
 	g.nseqs       = bin->nseqs;
 	g.rng_free    = bin->rng_free;
+	g.ref_pos     = bin->ref_pos;
 
 #ifdef DEBUG
 	{
@@ -2801,7 +2853,15 @@ static int io_bin_write_view(g_io *io, bin_index_t *bin, GView v) {
 	if (g.flags & BIN_CONS_VALID)   bflag |= BIN_CONS_VALID_;
 
 	*cp++ = GT_Bin;
-	*cp++ = g.rng_free == -1 ? 0 : 1; /* Format */
+
+	/* Format */
+	if (g.ref_pos) {
+	    *cp++ = 2;
+	} else if (g.rng_free != -1) {
+	    *cp++ = 1;
+	} else {
+	    *cp++ = 0;
+	}
 
 	cp += int2u7(bflag, cp);
 	if (!(bflag & BIN_POS_ZERO))     cp += int2s7(g.pos, cp);

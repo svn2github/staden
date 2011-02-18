@@ -79,11 +79,11 @@ set_def TAG_BRIEF_FORMAT  \
 	{Tag type:%t  Comment:"%.100c"}
 
 #set_def READ_BRIEF_FORMAT  \
-#	{Reading:%n(#%Rn)   Length:%l(%L)   Vector:%Tv   Clone:%Cn   Chemistry:%a   Primer:%P  Tstat:%Tc %c}
+#	{Reading:%n(#%Rn)  Length:%l(%L)   Vector:%Tv   Clone:%Cn   Chemistry:%a   Primer:%P  Tstat:%Tc %c}
 #set_def READ_BRIEF_FORMAT  \
 #	{%n(#%Rn) Clone:%Cn Vector:%Tv Type:%P;%a Tmpl:%Tc %c}
 set_def READ_BRIEF_FORMAT \
-	{Reading:%n(#%Rn)  Tech:%V  Length:%l(%L)  MappingQ:%m%**/%*m  Pos:%S%p / %*S%*p}
+	{Reading:%n(#%Rn)  %p/%rp Tech:%V  Length:%l(%L)  MappingQ:%m%**/%*m  Pos:%S%p / %*S%*p}
 
 set_def CONTIG_BRIEF_FORMAT  \
 	{Contig:%n(#%Rn)   Length:%l  Start:%s  End:%e}

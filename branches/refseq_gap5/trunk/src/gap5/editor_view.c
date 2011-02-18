@@ -341,6 +341,7 @@ char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format) {
     GapIO *io = xx->io;
     seq_t *s1 = get_seq(io, seq), *s2 = NULL, *s;
     tg_rec pair = 0;
+    int ref = 0;
     
     for (i = j = 0; format[i]; i++) {
 	if (format[i] != '%') {
@@ -361,6 +362,12 @@ char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format) {
 	    i++;
 	} else {
 	    raw = 0;
+	}
+	if (format[i] == 'r') {
+	    ref = 1;
+	    i++;
+	} else {
+	    ref = 0;
 	}
 
 	if (format[i] == '*') {
@@ -397,16 +404,35 @@ char *edGetBriefSeq(edview *xx, tg_rec seq, int pos, char *format) {
 
 	case 'p': {
 	    tg_rec cnum;
-	    int cpos;
-	    if (0 == sequence_get_position(xx->io, s->rec, &cnum, &cpos, NULL,
-					   NULL)) {
+	    if (ref) {
+		int cstart, cend;
+
+		if (0 == sequence_get_ref_position(xx->io, s->rec, &cnum,
+						   &cstart, &cend, NULL)) {
 		
-		if (raw || cnum == xx->contig->rec) {
-		    add_number(status_buf, &j, l1, l2, cpos);
-		} else {
-		    char buf[1024];
-		    sprintf(buf, "%d@%s", cpos, get_contig_name(io, cnum));
-		    add_string(status_buf, &j, l1, l2, buf);
+		    if (raw || cnum == xx->contig->rec) {
+			add_number(status_buf, &j, l1, l2, cstart);
+			add_string(status_buf, &j, 0, 0, "...");
+			add_number(status_buf, &j, l1, l2, cend);
+		    } else {
+			char buf[1024];
+			sprintf(buf, "%d@%s", cstart,
+				get_contig_name(io, cnum));
+			add_string(status_buf, &j, l1, l2, buf);
+		    }
+		}
+	    } else {
+		int cpos;
+		if (0 == sequence_get_position(xx->io, s->rec, &cnum,
+					       &cpos, NULL, NULL)) {
+		
+		    if (raw || cnum == xx->contig->rec) {
+			add_number(status_buf, &j, l1, l2, cpos);
+		    } else {
+			char buf[1024];
+			sprintf(buf, "%d@%s", cpos, get_contig_name(io, cnum));
+			add_string(status_buf, &j, l1, l2, buf);
+		    }
 		}
 	    }
 	    break;

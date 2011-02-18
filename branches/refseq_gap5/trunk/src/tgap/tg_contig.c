@@ -1115,6 +1115,9 @@ static int contig_seqs_in_range2(GapIO *io, tg_rec bin_num,
 		(*results)[count].y = l->y;
 		(*results)[count].orig_rec = bin->rec;
 		(*results)[count].orig_ind = n;
+		
+		(*results)[count].ref_start = l->ref_start;
+		(*results)[count].ref_end   = l->ref_end;
 		count++;
 	    }
 	}
@@ -1392,6 +1395,9 @@ static int contig_cons_in_range2(GapIO *io, tg_rec bin_num,
 		(*results)[count].y = l->y;
 		(*results)[count].orig_rec = bin->rec;
 		(*results)[count].orig_ind = n;
+
+		(*results)[count].ref_start = l->ref_start;
+		(*results)[count].ref_end   = l->ref_end;
 
 		if ((*results)[count].start > cend) {
 		    cst  = (*results)[count].start;
